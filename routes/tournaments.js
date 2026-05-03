@@ -299,15 +299,9 @@ router.post('/:id/rounds/:roundId/finish', requireAuth, requireOrganizer, (req, 
   res.json(sanitizeTournament(t, req.session.userId));
 });
 
-// ─── BÚSQUEDA DE USUARIOS ─────────────────────────────────────────────────────
-
-router.get('/users/search', (req, res) => {
-  const { q } = req.query;
-  if (!q || q.length < 2) return res.json([]);
-  res.json(searchUsers(q).slice(0, 8).map(u => ({ id: u.id, username: u.username, displayName: u.displayName, role: u.role })));
-});
-
 // ─── HELPERS INTERNOS ─────────────────────────────────────────────────────────
+// Nota: GET /api/users/search está registrado directamente en server.js para
+// evitar colisión con la ruta dinámica GET /:id de este router.
 
 function _playerEntry(user) {
   return { userId: user.id, displayName: user.displayName, score: 0, wins: 0, losses: 0, draws: 0, eliminatedFromTournament: false };

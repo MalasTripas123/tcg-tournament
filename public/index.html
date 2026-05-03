@@ -148,6 +148,14 @@
     .result-option:hover { border-color: var(--border-glow); }
     .result-option input { accent-color: var(--accent); }
 
+    /* DRAG & DROP */
+    .player-row[draggable="true"] { cursor: grab; }
+    .player-row[draggable="true"]:active { cursor: grabbing; }
+    .player-row[draggable="true"]:hover { background: rgba(139,124,246,0.06); }
+    .pod-dropzone { transition: min-height 0.15s, background 0.15s; }
+    .pod-dropzone.drag-active { min-height: 48px !important; background: rgba(139,124,246,0.12); border: 2px dashed var(--border-glow); border-radius: 8px; margin: 4px; }
+    .table-pod[ondragover] { transition: border-color 0.15s; }
+
     @media (max-width: 768px) {
       .card { padding: 1rem; }
       .modal { padding: 1.25rem; }
@@ -315,8 +323,85 @@ async function init() {
   await fetchCurrentUser();
   renderHeader();
   await loadTournaments();
+  await resolveRoute(location.pathname);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ROUTING — History API
+// Esquema de URLs:
+//   /                        → home
+//   /tournament/:id          → torneo (org o espectador según sesión)
+//   /lobby/:id               → lobby del organizador
+//   /profile/:userId         → perfil de usuario
+//   /create                  → crear torneo
+// ═══════════════════════════════════════════════════════════════
+
+async function resolveRoute(pathname) {
+  const segments = pathname.replace(/^\//, '').split('/');
+  const [section, id] = segments;
+
+  if (!section || section === '') {
+    _showView('home');
+    loadTournaments();
+    return;
+  }
+
+  if (section === 'create') {
+    if (!App.currentUser) { showLoginModal(); navigate('home'); return; }
+    App.prizes = [];
+    document.getElementById('prizes-list').innerHTML = '';
+    _showView('create');
+    history.replaceState({ view: 'create' }, '', '/create');
+    return;
+  }
+
+  if (section === 'profile' && id) {
+    try {
+      const data = await api('/auth/profile/' + id);
+      renderProfileView(data);
+      _showView('profile');
+    } catch {
+      toast('Perfil no encontrado', 'error');
+      navigate('home');
+    }
+    return;
+  }
+
+  if ((section === 'tournament' || section === 'lobby' || section === 'organizer') && id) {
+    App.currentTournamentId = id;
+    try {
+      const t = await api('/api/tournaments/' + id);
+      _updateTournamentCache(t);
+      const isOrg = App.currentUser && t.organizerId === App.currentUser.id;
+      if (t.status === 'lobby' && isOrg) {
+        renderLobby(t); _showView('lobby');
+      } else if (isOrg) {
+        renderOrganizerView(t); _showView('organizer');
+      } else {
+        renderSpectatorView(t); _showView('spectator');
+      }
+    } catch {
+      toast('Torneo no encontrado', 'error');
+      navigate('home');
+    }
+    return;
+  }
+
   navigate('home');
 }
+
+// _showView: cambia la vista visible sin tocar history
+// Usado internamente por resolveRoute (que ya gestionó history antes de llamarla)
+function _showView(view) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  const el = document.getElementById('view-' + view);
+  if (el) { el.classList.add('active', 'fade-in'); setTimeout(() => el.classList.remove('fade-in'), 400); }
+  App.currentView = view;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// Botón atrás / adelante del navegador
+window.addEventListener('popstate', () => resolveRoute(location.pathname));
 
 // ═══════════════════════════════════════════════════════════════
 // API HELPER
@@ -368,17 +453,47 @@ async function logout() {
   toast('Sesión cerrada', 'info');
 }
 
+// Copia un link absoluto al clipboard y muestra confirmación
+function copyLink(path) {
+  const url = location.origin + path;
+  navigator.clipboard.writeText(url).then(() => {
+    toast('Link copiado: ' + url, 'success');
+  }).catch(() => {
+    // Fallback para entornos sin clipboard API
+    prompt('Copia este link:', url);
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════
 // NAVEGACIÓN SPA
 // ═══════════════════════════════════════════════════════════════
-function navigate(view, tournamentId) {
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  const el = document.getElementById('view-' + view);
-  if (el) { el.classList.add('active', 'fade-in'); setTimeout(() => el.classList.remove('fade-in'), 400); }
-  App.currentView = view;
-  if (tournamentId) App.currentTournamentId = tournamentId;
+function navigate(view, id) {
+  // Calcular la URL canónica para cada vista
+  const urlMap = {
+    home:      '/',
+    create:    '/create',
+    lobby:     id ? '/lobby/' + id : '/lobby',
+    organizer: id ? '/organizer/' + id : '/organizer',
+    spectator: id ? '/tournament/' + id : '/tournament',
+    profile:   id ? '/profile/' + id : '/profile',
+  };
+  const url = urlMap[view] || '/';
+  history.pushState({ view, id }, '', url);
+
+  // Actualizar título de la pestaña
+  const titles = {
+    home: 'TCG Arena',
+    create: 'Crear Torneo — TCG Arena',
+    lobby: 'Lobby — TCG Arena',
+    organizer: 'Organizar — TCG Arena',
+    spectator: 'Torneo — TCG Arena',
+    profile: 'Perfil — TCG Arena',
+  };
+  document.title = titles[view] || 'TCG Arena';
+
+  _showView(view);
+  if (id) App.currentTournamentId = id;
   if (view === 'home') loadTournaments();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -513,8 +628,7 @@ async function openTournament(id) {
   App.currentTournamentId = id;
   try {
     const t = await api('/api/tournaments/' + id);
-    const idx = App.tournaments.findIndex(tt => tt.id === id);
-    if (idx !== -1) App.tournaments[idx] = t; else App.tournaments.push(t);
+    _updateTournamentCache(t);
     const isOrg = App.currentUser && t.organizerId === App.currentUser.id;
     if (t.status === 'lobby' && isOrg) { renderLobby(t); navigate('lobby', id); }
     else if (isOrg) { renderOrganizerView(t); navigate('organizer', id); }
@@ -529,7 +643,7 @@ function handleCreateTournament() {
   if (!App.currentUser) { toast('Debes iniciar sesión para crear un torneo', 'error'); showLoginModal(); return; }
   App.prizes = [];
   document.getElementById('prizes-list').innerHTML = '';
-  navigate('create');
+  navigate('create', null);
 }
 
 function addPrize(type) {
@@ -786,7 +900,7 @@ function renderOrganizerView(t) {
         <div style="display:flex;flex-direction:column;gap:1rem;">
           <div class="card" id="standings-card">
             <span class="section-title">Tabla de Posiciones</span>
-            ${renderStandings(t.players, t.id, true)}
+            ${renderStandings(t.players, t.id, true, t.rounds)}
           </div>
           ${t.prizes.length ? `
             <div class="card">
@@ -816,6 +930,7 @@ function renderOrganizerView(t) {
 
 function renderOrgTables(t, round) {
   if (!round.tables.length) return '<p style="color:var(--text-hint);">Sin mesas configuradas.</p>';
+  const isPending = round.status === 'pending';
   return round.tables.map(table => {
     const finished = table.status === 'finished';
     const resultBadge = finished ? (
@@ -824,11 +939,15 @@ function renderOrgTables(t, round) {
       `<span class="badge badge-gray">Sin ganador</span>`
     ) : '';
     return `
-    <div class="table-pod ${finished ? 'pod-finished' : ''}" id="pod-${table.id}">
+    <div class="table-pod ${finished ? 'pod-finished' : ''}" id="pod-${table.id}"
+         ${isPending ? `ondragover="event.preventDefault();event.dataTransfer.dropEffect='move';this.querySelector('.pod-dropzone').classList.add('drag-active')"
+                       ondragleave="this.querySelector('.pod-dropzone').classList.remove('drag-active')"
+                       ondrop="onDropToTable(event,'${t.id}','${round.id}','${table.id}')"` : ''}>
       <div class="table-pod-header">
         <h3>Mesa ${table.id.replace('t','')}</h3>
         <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
           ${resultBadge}
+          ${isPending ? '<span style="font-size:0.72rem;color:var(--text-hint);letter-spacing:0.05em;">⠿ arrastra jugadores</span>' : ''}
           ${!finished && round.status === 'active' && table.startTime ? `<span id="sw-${table.id}" class="stopwatch-display"></span>` : ''}
           ${!finished && round.status !== 'finished' ? `
             <button class="btn btn-outline btn-sm" onclick="openFinishTableModal('${t.id}','${round.id}','${table.id}')">
@@ -836,8 +955,16 @@ function renderOrgTables(t, round) {
             </button>` : ''}
         </div>
       </div>
-      ${table.players.map(p => `
-        <div class="player-row ${p.eliminated ? 'eliminated' : ''}">
+      <div class="pod-dropzone" style="min-height:4px;transition:min-height 0.15s;"><!-- drop target --></div>
+      ${table.players.map((p,pi) => `
+        <div class="player-row ${p.eliminated ? 'eliminated' : ''}"
+             id="pr-${table.id}-${p.userId}"
+             ${isPending ? `draggable="true"
+               ondragstart="onDragStart(event,'${table.id}','${p.userId}','${pi}')"
+               ondragend="onDragEnd(event)"
+               ondragover="event.preventDefault();event.dataTransfer.dropEffect='move'"
+               ondrop="onDropToPlayer(event,'${t.id}','${round.id}','${table.id}','${pi}')"` : ''}>
+          ${isPending ? '<span style="cursor:grab;color:var(--text-hint);margin-right:2px;font-size:1rem;line-height:1;">⠿</span>' : ''}
           <div class="player-avatar">${initials(p.displayName)}</div>
           <span style="flex:1;font-weight:600;font-size:0.92rem;">${escHtml(p.displayName)}</span>
           ${!finished && (round.status === 'active' || round.status === 'pending') ? `
@@ -855,6 +982,95 @@ function renderOrgTables(t, round) {
         </div>`).join('')}
     </div>`;
   }).join('');
+}
+
+// ─── DRAG & DROP — estado temporal ────────────────────────────
+const _drag = { tableId: null, userId: null, fromIndex: null };
+
+function onDragStart(event, tableId, userId, fromIndex) {
+  _drag.tableId = tableId;
+  _drag.userId  = userId;
+  _drag.fromIndex = parseInt(fromIndex);
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', userId);
+  setTimeout(() => { const el = document.getElementById('pr-' + tableId + '-' + userId); if (el) el.style.opacity = '0.4'; }, 0);
+}
+
+function onDragEnd(event) {
+  const el = document.getElementById('pr-' + _drag.tableId + '-' + _drag.userId);
+  if (el) el.style.opacity = '';
+  document.querySelectorAll('.pod-dropzone').forEach(z => z.classList.remove('drag-active'));
+}
+
+// Soltado sobre OTRO jugador → reordenar dentro de la misma mesa o mover entre mesas
+async function onDropToPlayer(event, tid, rid, targetTableId, targetIndex) {
+  event.preventDefault();
+  event.stopPropagation();
+  const { tableId: srcTableId, userId, fromIndex } = _drag;
+  if (!userId) return;
+
+  const t = App.tournaments.find(tt => tt.id === tid);
+  const round = t?.rounds.find(r => r.id === rid);
+  if (!round) return;
+
+  const srcTable = round.tables.find(tb => tb.id === srcTableId);
+  const dstTable = round.tables.find(tb => tb.id === targetTableId);
+  if (!srcTable || !dstTable) return;
+
+  // Extraer jugador de origen
+  const playerIdx = srcTable.players.findIndex(p => p.userId === userId);
+  if (playerIdx === -1) return;
+  const [player] = srcTable.players.splice(playerIdx, 1);
+
+  // Insertar en destino
+  if (srcTableId === targetTableId) {
+    // Reordenar en la misma mesa
+    const adjustedTarget = targetIndex > playerIdx ? targetIndex - 1 : targetIndex;
+    srcTable.players.splice(adjustedTarget, 0, player);
+  } else {
+    // Mover a otra mesa
+    dstTable.players.splice(targetIndex, 0, player);
+  }
+
+  await _persistTables(tid, rid, round);
+}
+
+// Soltado sobre la zona vacía de una mesa → mover al final de esa mesa
+async function onDropToTable(event, tid, rid, targetTableId) {
+  event.preventDefault();
+  const { tableId: srcTableId, userId } = _drag;
+  if (!userId || srcTableId === targetTableId) return;
+
+  const t = App.tournaments.find(tt => tt.id === tid);
+  const round = t?.rounds.find(r => r.id === rid);
+  if (!round) return;
+
+  const srcTable = round.tables.find(tb => tb.id === srcTableId);
+  const dstTable = round.tables.find(tb => tb.id === targetTableId);
+  if (!srcTable || !dstTable) return;
+
+  const playerIdx = srcTable.players.findIndex(p => p.userId === userId);
+  if (playerIdx === -1) return;
+  const [player] = srcTable.players.splice(playerIdx, 1);
+  dstTable.players.push(player);
+
+  await _persistTables(tid, rid, round);
+}
+
+async function _persistTables(tid, rid, round) {
+  try {
+    const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables', {
+      method: 'PUT',
+      body: { tables: round.tables },
+    });
+    _updateTournamentCache(t);
+    // Re-renderizar solo las mesas sin perder timers
+    const container = document.getElementById('org-tables-container');
+    if (container) {
+      const updatedRound = t.rounds.find(r => r.id === rid);
+      if (updatedRound) container.innerHTML = renderOrgTables(t, updatedRound);
+    }
+  } catch(e) { toast('Error al guardar mesas: ' + e.message, 'error'); }
 }
 
 // ─── SCORE MANAGEMENT ────────────────────────────────────────
@@ -914,7 +1130,7 @@ async function adjustGlobalScore(tid, userId, delta) {
 
 function refreshStandingsCard(t) {
   const card = document.getElementById('standings-card');
-  if (card) card.innerHTML = '<span class="section-title">Tabla de Posiciones</span>' + renderStandings(t.players, t.id, true);
+  if (card) card.innerHTML = '<span class="section-title">Tabla de Posiciones</span>' + renderStandings(t.players, t.id, true, t.rounds);
 }
 
 // ─── FINISH TABLE MODAL ───────────────────────────────────────
@@ -1095,6 +1311,9 @@ function renderSpectatorView(t) {
             </div>
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.5rem;">
+            <button class="btn btn-ghost btn-sm" onclick="copyLink('/tournament/${t.id}')" title="Copiar link del torneo">
+              🔗 Copiar link
+            </button>
             <span style="font-family:'Cinzel',serif;font-size:1.2rem;font-weight:700;color:var(--accent);">${t.currentRound}/${t.totalRounds}</span>
             <span style="font-size:0.75rem;color:var(--text-hint);">rondas</span>
             ${!isOrg && t.status === 'lobby' ? (
@@ -1187,7 +1406,7 @@ function renderSpectatorView(t) {
         <div style="display:flex;flex-direction:column;gap:1rem;">
           <div class="card">
             <span class="section-title">Tabla de Posiciones</span>
-            ${renderStandings(t.players, t.id, false)}
+            ${renderStandings(t.players, t.id, false, t.rounds)}
           </div>
           ${t.prizes.length ? `
             <div class="card">
@@ -1261,14 +1480,68 @@ function renderRoundHistory(t) {
 // ═══════════════════════════════════════════════════════════════
 // STANDINGS
 // ═══════════════════════════════════════════════════════════════
-function renderStandings(players, tid, editable) {
+// Calcula el OW% (Opponent Win Percentage) de un jugador.
+// OW% = promedio del win rate de cada oponente que se ha enfrentado.
+// Win rate de un oponente = sus victorias / sus partidas totales jugadas.
+// Si no hay datos suficientes devuelve null (se muestra como "—").
+function calcOWP(player, allPlayers, rounds) {
+  // Recopilar todos los oponentes con los que se ha sentado
+  const opponentIds = new Set();
+  for (const round of rounds) {
+    if (round.status !== 'finished') continue;
+    for (const table of round.tables) {
+      const inTable = table.players.some(p => p.userId === player.userId);
+      if (!inTable) continue;
+      for (const p of table.players) {
+        if (p.userId !== player.userId) opponentIds.add(p.userId);
+      }
+    }
+  }
+  if (!opponentIds.size) return null;
+
+  const rates = [];
+  for (const oid of opponentIds) {
+    const opp = allPlayers.find(p => p.userId === oid);
+    if (!opp) continue;
+    const total = (opp.wins || 0) + (opp.losses || 0) + (opp.draws || 0);
+    if (total === 0) continue;
+    // Win rate del oponente; los empates cuentan 0.5
+    const wr = ((opp.wins || 0) + (opp.draws || 0) * 0.5) / total;
+    rates.push(wr);
+  }
+  if (!rates.length) return null;
+  return rates.reduce((s, r) => s + r, 0) / rates.length;
+}
+
+function renderStandings(players, tid, editable, rounds) {
   if (!players.length) return '<p style="color:var(--text-hint);text-align:center;padding:1rem 0;font-size:0.9rem;">Sin jugadores.</p>';
-  const sorted = [...players].sort((a,b) => b.score !== a.score ? b.score - a.score : (b.wins||0) - (a.wins||0));
+  rounds = rounds || [];
+
+  // Calcular OW% para cada jugador antes de ordenar
+  const withOwp = players.map(p => ({
+    ...p,
+    owp: calcOWP(p, players, rounds),
+  }));
+
+  // Ordenar: Pts DESC → Victorias DESC → OW% DESC
+  const sorted = withOwp.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if ((b.wins||0) !== (a.wins||0)) return (b.wins||0) - (a.wins||0);
+    if (b.owp !== null && a.owp !== null) return b.owp - a.owp;
+    return 0;
+  });
+
   const icons = ['🥇','🥈','🥉'];
+  const fmtOwp = (v) => v === null ? '—' : (v * 100).toFixed(1) + '%';
+
   return `<table class="standings-table">
     <thead><tr>
-      <th>#</th><th>Jugador</th><th style="text-align:right;">Pts</th>
-      <th style="text-align:right;">V</th><th style="text-align:right;">E</th>
+      <th>#</th>
+      <th>Jugador</th>
+      <th style="text-align:right;">Pts</th>
+      <th style="text-align:right;">V</th>
+      <th style="text-align:right;">E</th>
+      <th style="text-align:right;" title="Opponent Win Percentage: promedio del win rate de tus oponentes. Desempate estándar en TCG.">OW%</th>
     </tr></thead>
     <tbody>
       ${sorted.map((p,i) => `
@@ -1291,6 +1564,7 @@ function renderStandings(players, tid, editable) {
           </td>
           <td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.wins||0}</td>
           <td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.draws||0}</td>
+          <td style="text-align:right;font-size:0.78rem;color:var(--text-hint);" title="OW%: ${fmtOwp(p.owp)}">${fmtOwp(p.owp)}</td>
         </tr>`).join('')}
     </tbody>
   </table>`;
@@ -1303,7 +1577,7 @@ async function openProfile(userId) {
   try {
     const data = await api('/auth/profile/' + userId);
     renderProfileView(data);
-    navigate('profile');
+    navigate('profile', userId);
   } catch(e) { toast('No se pudo cargar el perfil', 'error'); }
 }
 
@@ -1321,6 +1595,9 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
           ${isOwn?'<span class="badge badge-purple">Tú</span>':''}
         </div>
       </div>
+      <button class="btn btn-ghost btn-sm" onclick="copyLink('/profile/${user.id}')" title="Copiar link del perfil">
+        🔗 Copiar link
+      </button>
     </div>
 
     ${organizedActive.length ? `
