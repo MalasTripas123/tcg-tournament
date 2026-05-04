@@ -1,54 +1,69 @@
 // server.js
+require('dotenv').config(); // carga .env en desarrollo local
+
 const express = require('express');
 const session = require('express-session');
-const path = require('path');
+const path    = require('path');
+const { connectDB } = require('./lib/db');
+const { seedUsers } = require('./lib/store');
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// ─── MIDDLEWARES ──────────────────────────────────────────────────────────────
-
+// ─── MIDDLEWARES ──────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
 app.use(session({
-  secret: 'tcg-mvp-secret-2024', // En producción: variable de entorno
+  secret: process.env.SESSION_SECRET || 'tcg-dev-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 24 * 60 * 60 * 1000 }, // 24h
+  cookie: {
+    maxAge: 24 * 60 * 60 * 1000,
+    // En producción con HTTPS, activar secure: true
+    secure: process.env.NODE_ENV === 'production' && process.env.TRUST_PROXY === '1',
+  },
 }));
 
-// Archivos estáticos
+// Necesario para que las cookies funcionen correctamente detrás del proxy de Render
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ─── RUTAS DE API ─────────────────────────────────────────────────────────────
-
+// ─── RUTAS DE API ─────────────────────────────────────────────────
 app.use('/auth', require('./routes/auth'));
 app.use('/api/tournaments', require('./routes/tournaments'));
 
-// Búsqueda de usuarios (ruta separada para claridad)
+// Búsqueda de usuarios (nivel app para evitar colisión con /:id del router de torneos)
 const { searchUsers } = require('./lib/store');
-app.get('/api/users/search', (req, res) => {
+app.get('/api/users/search', async (req, res) => {
   const { q } = req.query;
   if (!q || q.length < 2) return res.json([]);
-  const results = searchUsers(q).slice(0, 8).map(u => ({
-    id: u.id,
-    username: u.username,
-    displayName: u.displayName,
-    role: u.role,
-  }));
-  res.json(results);
+  try {
+    const results = await searchUsers(q);
+    res.json(results.slice(0, 8).map(u => ({
+      id: u.uid,
+      username: u.username,
+      displayName: u.displayName,
+      role: u.role,
+    })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// ─── SPA FALLBACK ─────────────────────────────────────────────────────────────
-// Todas las rutas no-API sirven el index.html (SPA)
+// ─── SPA FALLBACK ─────────────────────────────────────────────────
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ─── INICIO ───────────────────────────────────────────────────────────────────
+// ─── ARRANQUE ─────────────────────────────────────────────────────
+async function start() {
+  await connectDB();   // 1. conectar a MongoDB
+  await seedUsers();   // 2. insertar usuarios de prueba si la DB está vacía
+  app.listen(PORT, () => {
+    console.log(`\n🃏  TCG Arena corriendo en http://localhost:${PORT}`);
+    console.log(`   Login: admin_store / 1234\n`);
+  });
+}
 
-app.listen(PORT, () => {
-  console.log(`\n🃏  TCG Tournament Manager corriendo en http://localhost:${PORT}`);
-  console.log(`   Usuarios de prueba: admin_store/1234 (organizador), jugador_uno/1234 (jugador)\n`);
-});
+start();

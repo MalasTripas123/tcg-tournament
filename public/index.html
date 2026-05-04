@@ -1583,6 +1583,11 @@ async function openProfile(userId) {
 
 function renderProfileView({ user, organizedActive, organizedFinished, playingIn }) {
   const isOwn = App.currentUser?.id === user.id;
+  // Normalizar _id → id para compatibilidad con MongoDB
+  const normalize = t => ({ ...t, id: t._id || t.id });
+  organizedActive   = organizedActive.map(normalize);
+  organizedFinished = organizedFinished.map(normalize);
+  playingIn         = playingIn.map(normalize);
   document.getElementById('profile-content').innerHTML = `
     <button class="btn btn-ghost btn-sm" onclick="navigate('home')" style="margin-bottom:1.5rem;">← Inicio</button>
     <div class="card" style="display:flex;align-items:center;gap:1.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
@@ -1631,9 +1636,10 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
 function profileTRow(t, canManage) {
   const sb = { lobby:'badge-gray', active:'badge-green', finished:'badge-purple' };
   const sl = { lobby:'Lobby', active:'En curso', finished:'Finalizado' };
+  const tid = t._id || t.id;
   return `
     <div class="card-elevated" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;cursor:pointer;"
-         onclick="openTournament('${t.id}')"
+         onclick="openTournament('${tid}')"
          onmouseenter="this.style.borderColor='var(--border-glow)'" onmouseleave="this.style.borderColor='var(--border)'">
       <div style="flex:1;">
         <div style="font-weight:600;font-size:0.92rem;">${escHtml(t.name)}</div>
