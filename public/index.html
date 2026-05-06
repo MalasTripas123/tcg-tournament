@@ -149,12 +149,25 @@
     .result-option input { accent-color: var(--accent); }
 
     /* DRAG & DROP */
-    .player-row[draggable="true"] { cursor: grab; }
-    .player-row[draggable="true"]:active { cursor: grabbing; }
+    .player-row[draggable="true"] { cursor: grab; transition: opacity 0.15s, background 0.15s; }
     .player-row[draggable="true"]:hover { background: rgba(139,124,246,0.06); }
-    .pod-dropzone { transition: min-height 0.15s, background 0.15s; }
-    .pod-dropzone.drag-active { min-height: 48px !important; background: rgba(139,124,246,0.12); border: 2px dashed var(--border-glow); border-radius: 8px; margin: 4px; }
-    .table-pod[ondragover] { transition: border-color 0.15s; }
+    .player-row.dragging { opacity: 0.35; }
+    .player-row.drag-over-player { background: rgba(139,124,246,0.18) !important; border-top: 2px solid var(--accent); }
+    .drop-zone {
+      min-height: 36px; margin: 4px 8px 8px; border-radius: 8px;
+      border: 2px dashed var(--border); display: flex; align-items: center;
+      justify-content: center; transition: all 0.15s; cursor: pointer;
+    }
+    .drop-zone span { font-size: 0.75rem; color: var(--text-hint); letter-spacing: 0.05em; }
+    .drop-zone.drop-zone-active { border-color: var(--accent); background: rgba(139,124,246,0.12); }
+    .drop-zone.drop-zone-active span { color: var(--accent); }
+
+    /* TABLA DE POSICIONES COMPACTA */
+    .standings-table th { font-size: 0.68rem; padding: 0.45rem 0.5rem; white-space: nowrap; }
+    .standings-table td { padding: 0.5rem 0.5rem; font-size: 0.82rem; }
+    .standings-table .player-avatar { width: 20px; height: 20px; font-size: 0.52rem; }
+    .standings-table .score-btn { width: 18px; height: 18px; font-size: 0.8rem; }
+    .standings-table #gs-placeholder { min-width: 1.5rem; font-size: 0.88rem; }
 
     @media (max-width: 768px) {
       .card { padding: 1rem; }
@@ -939,15 +952,12 @@ function renderOrgTables(t, round) {
       `<span class="badge badge-gray">Sin ganador</span>`
     ) : '';
     return `
-    <div class="table-pod ${finished ? 'pod-finished' : ''}" id="pod-${table.id}"
-         ${isPending ? `ondragover="event.preventDefault();event.dataTransfer.dropEffect='move';this.querySelector('.pod-dropzone').classList.add('drag-active')"
-                       ondragleave="this.querySelector('.pod-dropzone').classList.remove('drag-active')"
-                       ondrop="onDropToTable(event,'${t.id}','${round.id}','${table.id}')"` : ''}>
+    <div class="table-pod ${finished ? 'pod-finished' : ''}" id="pod-${table.id}">
       <div class="table-pod-header">
         <h3>Mesa ${table.id.replace('t','')}</h3>
         <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
           ${resultBadge}
-          ${isPending ? '<span style="font-size:0.72rem;color:var(--text-hint);letter-spacing:0.05em;">⠿ arrastra jugadores</span>' : ''}
+          ${isPending ? '<span style="font-size:0.72rem;color:var(--text-hint);letter-spacing:0.05em;">⠿ arrastra</span>' : ''}
           ${!finished && round.status === 'active' && table.startTime ? `<span id="sw-${table.id}" class="stopwatch-display"></span>` : ''}
           ${!finished && round.status !== 'finished' ? `
             <button class="btn btn-outline btn-sm" onclick="openFinishTableModal('${t.id}','${round.id}','${table.id}')">
@@ -955,15 +965,15 @@ function renderOrgTables(t, round) {
             </button>` : ''}
         </div>
       </div>
-      <div class="pod-dropzone" style="min-height:4px;transition:min-height 0.15s;"><!-- drop target --></div>
       ${table.players.map((p,pi) => `
         <div class="player-row ${p.eliminated ? 'eliminated' : ''}"
              id="pr-${table.id}-${p.userId}"
              ${isPending ? `draggable="true"
-               ondragstart="onDragStart(event,'${table.id}','${p.userId}','${pi}')"
+               ondragstart="onDragStart(event,'${table.id}','${p.userId}')"
                ondragend="onDragEnd(event)"
-               ondragover="event.preventDefault();event.dataTransfer.dropEffect='move'"
-               ondrop="onDropToPlayer(event,'${t.id}','${round.id}','${table.id}','${pi}')"` : ''}>
+               ondragover="onDragOverPlayer(event)"
+               ondragleave="event.currentTarget.classList.remove('drag-over-player')"
+               ondrop="onDropToPlayer(event,'${t.id}','${round.id}','${table.id}','${p.userId}')"` : ''}>
           ${isPending ? '<span style="cursor:grab;color:var(--text-hint);margin-right:2px;font-size:1rem;line-height:1;">⠿</span>' : ''}
           <div class="player-avatar">${initials(p.displayName)}</div>
           <span style="flex:1;font-weight:600;font-size:0.92rem;">${escHtml(p.displayName)}</span>
@@ -980,34 +990,74 @@ function renderOrgTables(t, round) {
             </button>` :
           `<span style="font-family:'Cinzel',serif;font-size:1.05rem;font-weight:700;color:var(--accent);">${p.score||0}</span>`}
         </div>`).join('')}
+      ${isPending ? `
+        <div class="drop-zone"
+             ondragover="onDragOverZone(event)"
+             ondragleave="onDragLeaveZone(event)"
+             ondrop="onDropToZone(event,'${t.id}','${round.id}','${table.id}')">
+          <span>Soltar aquí</span>
+        </div>` : ''}
     </div>`;
   }).join('');
 }
 
-// ─── DRAG & DROP — estado temporal ────────────────────────────
-const _drag = { tableId: null, userId: null, fromIndex: null };
+// ─── DRAG & DROP ─────────────────────────────────────────────────
+// Estrategia: usamos solo dos eventos de destino:
+//   1. onDragOverPlayer / onDropToPlayer: soltar SOBRE un jugador específico
+//   2. onDropToZone: soltar en la zona vacía al final de una mesa
+// El pod completo NO tiene handler de drop para evitar disparos erráticos.
 
-function onDragStart(event, tableId, userId, fromIndex) {
+const _drag = { tableId: null, userId: null };
+
+function onDragStart(event, tableId, userId) {
   _drag.tableId = tableId;
   _drag.userId  = userId;
-  _drag.fromIndex = parseInt(fromIndex);
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('text/plain', userId);
-  setTimeout(() => { const el = document.getElementById('pr-' + tableId + '-' + userId); if (el) el.style.opacity = '0.4'; }, 0);
+  // Marcar el elemento arrastrado visualmente con un pequeño delay
+  // para que el "ghost" del navegador se capture antes del cambio de estilo
+  requestAnimationFrame(() => {
+    const el = document.getElementById('pr-' + tableId + '-' + userId);
+    if (el) el.classList.add('dragging');
+  });
 }
 
 function onDragEnd(event) {
-  const el = document.getElementById('pr-' + _drag.tableId + '-' + _drag.userId);
-  if (el) el.style.opacity = '';
-  document.querySelectorAll('.pod-dropzone').forEach(z => z.classList.remove('drag-active'));
+  // Limpiar todos los estilos de arrastre
+  document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+  document.querySelectorAll('.drag-over-player').forEach(el => el.classList.remove('drag-over-player'));
+  document.querySelectorAll('.drop-zone-active').forEach(el => el.classList.remove('drop-zone-active'));
 }
 
-// Soltado sobre OTRO jugador → reordenar dentro de la misma mesa o mover entre mesas
-async function onDropToPlayer(event, tid, rid, targetTableId, targetIndex) {
+function onDragOverPlayer(event) {
   event.preventDefault();
   event.stopPropagation();
-  const { tableId: srcTableId, userId, fromIndex } = _drag;
-  if (!userId) return;
+  event.dataTransfer.dropEffect = 'move';
+  // Resaltar solo este player-row
+  document.querySelectorAll('.drag-over-player').forEach(el => el.classList.remove('drag-over-player'));
+  event.currentTarget.classList.add('drag-over-player');
+}
+
+function onDragOverZone(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  event.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.drop-zone-active').forEach(el => el.classList.remove('drop-zone-active'));
+  event.currentTarget.classList.add('drop-zone-active');
+}
+
+function onDragLeaveZone(event) {
+  event.currentTarget.classList.remove('drop-zone-active');
+}
+
+// Soltar SOBRE un jugador → insertar antes de ese jugador
+async function onDropToPlayer(event, tid, rid, targetTableId, targetUserId) {
+  event.preventDefault();
+  event.stopPropagation();
+  onDragEnd();
+
+  const { tableId: srcTableId, userId: srcUserId } = _drag;
+  if (!srcUserId || srcUserId === targetUserId) return;
 
   const t = App.tournaments.find(tt => tt.id === tid);
   const round = t?.rounds.find(r => r.id === rid);
@@ -1017,30 +1067,29 @@ async function onDropToPlayer(event, tid, rid, targetTableId, targetIndex) {
   const dstTable = round.tables.find(tb => tb.id === targetTableId);
   if (!srcTable || !dstTable) return;
 
-  // Extraer jugador de origen
-  const playerIdx = srcTable.players.findIndex(p => p.userId === userId);
-  if (playerIdx === -1) return;
-  const [player] = srcTable.players.splice(playerIdx, 1);
+  // Sacar jugador del origen
+  const srcIdx = srcTable.players.findIndex(p => p.userId === srcUserId);
+  if (srcIdx === -1) return;
+  const [player] = srcTable.players.splice(srcIdx, 1);
 
-  // Insertar en destino
-  if (srcTableId === targetTableId) {
-    // Reordenar en la misma mesa
-    const adjustedTarget = targetIndex > playerIdx ? targetIndex - 1 : targetIndex;
-    srcTable.players.splice(adjustedTarget, 0, player);
-  } else {
-    // Mover a otra mesa
-    dstTable.players.splice(targetIndex, 0, player);
-  }
+  // Insertar antes del jugador destino
+  const dstIdx = dstTable.players.findIndex(p => p.userId === targetUserId);
+  const insertAt = dstIdx === -1 ? dstTable.players.length : dstIdx;
+  dstTable.players.splice(insertAt, 0, player);
 
   await _persistTables(tid, rid, round);
 }
 
-// Soltado sobre la zona vacía de una mesa → mover al final de esa mesa
-async function onDropToTable(event, tid, rid, targetTableId) {
+// Soltar en la ZONA VACÍA al final de una mesa
+async function onDropToZone(event, tid, rid, targetTableId) {
   event.preventDefault();
-  const { tableId: srcTableId, userId } = _drag;
-  if (!userId || srcTableId === targetTableId) return;
+  event.stopPropagation();
+  onDragEnd();
 
+  const { tableId: srcTableId, userId: srcUserId } = _drag;
+  if (!srcUserId) return;
+
+  // Si es la misma mesa, simplemente mover al final
   const t = App.tournaments.find(tt => tt.id === tid);
   const round = t?.rounds.find(r => r.id === rid);
   if (!round) return;
@@ -1049,9 +1098,9 @@ async function onDropToTable(event, tid, rid, targetTableId) {
   const dstTable = round.tables.find(tb => tb.id === targetTableId);
   if (!srcTable || !dstTable) return;
 
-  const playerIdx = srcTable.players.findIndex(p => p.userId === userId);
-  if (playerIdx === -1) return;
-  const [player] = srcTable.players.splice(playerIdx, 1);
+  const srcIdx = srcTable.players.findIndex(p => p.userId === srcUserId);
+  if (srcIdx === -1) return;
+  const [player] = srcTable.players.splice(srcIdx, 1);
   dstTable.players.push(player);
 
   await _persistTables(tid, rid, round);
@@ -1536,31 +1585,31 @@ function renderStandings(players, tid, editable, rounds) {
 
   return `<table class="standings-table">
     <thead><tr>
-      <th>#</th>
+      <th style="width:1.8rem;">#</th>
       <th>Jugador</th>
-      <th style="text-align:right;">Pts</th>
-      <th style="text-align:right;">V</th>
-      <th style="text-align:right;">E</th>
-      <th style="text-align:right;" title="Opponent Win Percentage: promedio del win rate de tus oponentes. Desempate estándar en TCG.">OW%</th>
+      <th style="text-align:right;" title="Puntos totales">Pts</th>
+      <th style="text-align:right;" title="Victorias">V</th>
+      <th style="text-align:right;" title="Empates">E</th>
+      <th style="text-align:right;" title="Opponent Win Percentage — desempate estándar TCG">OW%</th>
     </tr></thead>
     <tbody>
       ${sorted.map((p,i) => `
         <tr class="${i<3?'rank-'+(i+1):''}">
           <td style="font-family:'Cinzel',serif;font-size:0.82rem;">${icons[i]||i+1}</td>
-          <td>
-            <div style="display:flex;align-items:center;gap:0.5rem;">
-              <div class="player-avatar" style="width:24px;height:24px;font-size:0.58rem;">${initials(p.displayName)}</div>
-              <span style="font-size:0.85rem;">${escHtml(p.displayName)}</span>
+          <td style="max-width:120px;">
+            <div style="display:flex;align-items:center;gap:0.4rem;">
+              <div class="player-avatar" style="width:20px;height:20px;font-size:0.5rem;flex-shrink:0;">${initials(p.displayName)}</div>
+              <span style="font-size:0.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(p.displayName)}</span>
             </div>
           </td>
           <td style="text-align:right;">
             ${editable ? `
-              <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.2rem;">
-                <button class="score-btn" style="width:20px;height:20px;font-size:0.85rem;" onclick="adjustGlobalScore('${tid}','${p.userId}',-1)">−</button>
-                <span id="gs-${p.userId}" style="font-family:'Cinzel',serif;font-weight:700;min-width:1.8rem;text-align:center;">${p.score||0}</span>
-                <button class="score-btn" style="width:20px;height:20px;font-size:0.85rem;" onclick="adjustGlobalScore('${tid}','${p.userId}',1)">+</button>
+              <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.15rem;">
+                <button class="score-btn" style="width:16px;height:16px;font-size:0.75rem;border-radius:3px;" onclick="adjustGlobalScore('${tid}','${p.userId}',-1)">−</button>
+                <span id="gs-${p.userId}" style="font-family:'Cinzel',serif;font-weight:700;font-size:0.88rem;min-width:1.5rem;text-align:center;">${p.score||0}</span>
+                <button class="score-btn" style="width:16px;height:16px;font-size:0.75rem;border-radius:3px;" onclick="adjustGlobalScore('${tid}','${p.userId}',1)">+</button>
               </div>` :
-              `<span style="font-family:'Cinzel',serif;font-weight:700;">${p.score||0}</span>`}
+              `<span style="font-family:'Cinzel',serif;font-weight:700;font-size:0.88rem;">${p.score||0}</span>`}
           </td>
           <td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.wins||0}</td>
           <td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.draws||0}</td>
