@@ -15,6 +15,17 @@ async function findByUid(uid) {
   return User.findOne({ uid }).lean();
 }
 
+async function findByPublicId(publicId) {
+  if (typeof publicId !== 'string' || !publicId.trim()) return null;
+  const value = publicId.trim().toLowerCase();
+  return User.findOne({
+    $or: [
+      { uid: publicId.trim() },
+      { username: value },
+    ],
+  }).lean();
+}
+
 async function findByUsername(username) {
   if (typeof username !== 'string') return null;
   return User.findOne({ username: username.toLowerCase().trim() }).lean();
@@ -84,6 +95,7 @@ module.exports = {
   countUsers,
   insertUsers,
   findByUid,
+  findByPublicId,
   findByUsername,
   searchUsers,
   createUser,

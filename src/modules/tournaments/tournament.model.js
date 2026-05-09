@@ -71,6 +71,7 @@ const tournamentSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   organizerId: { type: String, required: true },
   organizerName: { type: String, required: true },
+  organizerUsername: { type: String, default: '' },
   totalRounds: { type: Number, required: true, min: 1 },
   roundDuration: { type: Number, required: true, min: 0 },
   status: { type: String, enum: ['lobby', 'active', 'review', 'finished'], default: 'lobby' },

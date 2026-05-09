@@ -55,6 +55,8 @@
     .card-elevated { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
     .card-accent-left { border-left: 3px solid var(--accent); }
     .card-accent-gold  { border-left: 3px solid var(--gold); }
+    .organizer-link { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0 0 0.65rem; padding: 0; border: 0; background: transparent; color: var(--gold); font-family: 'Rajdhani', sans-serif; font-size: 1rem; font-weight: 700; cursor: pointer; text-decoration: none; }
+    .organizer-link:hover { color: #ffe66d; text-decoration: underline; }
 
     .phase-card { background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 12px; padding: 1rem 1.25rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .phase-card.phase-active { border-left-color: var(--success); box-shadow: 0 0 0 1px rgba(34,197,94,0.08); }

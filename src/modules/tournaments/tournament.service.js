@@ -43,6 +43,7 @@ async function createTournament(data, organizerId) {
     name: data.name,
     organizerId,
     organizerName: organizer.displayName,
+    organizerUsername: organizer.username,
     totalRounds: data.totalRounds,
     roundDuration: data.roundDuration,
     status: 'lobby',
@@ -66,7 +67,7 @@ async function addPlayer(tournamentId, sessionUserId, requestedUserId) {
 
   const requesterIsOrganizer = policies.isOrganizer(tournament, sessionUserId);
   const targetUserId = requesterIsOrganizer ? requestedUserId : sessionUserId;
-  const user = await userRepository.findByUid(targetUserId);
+  const user = await userRepository.findByPublicId(targetUserId);
   if (!user) throw ApiError.notFound('Jugador no encontrado');
 
   if (tournament.players.some(player => player.userId === targetUserId)) {

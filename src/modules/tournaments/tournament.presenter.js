@@ -18,6 +18,7 @@ function presentTournament(tournament, viewer = null) {
     name: tournament.name,
     organizerId: tournament.organizerId,
     organizerName: tournament.organizerName,
+    organizerUsername: tournament.organizerUsername || '',
     totalRounds: tournament.totalRounds,
     roundDuration: tournament.roundDuration,
     status: tournament.status,

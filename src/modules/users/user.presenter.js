@@ -3,6 +3,7 @@ function presentUser(user) {
   return {
     id: user.uid,
     username: user.username,
+    profileSlug: user.username,
     displayName: user.displayName,
     role: user.role,
     isLicensed: user.isLicensed,
@@ -15,6 +16,7 @@ function presentUserSearch(users) {
   return users.map(user => ({
     id: user.uid,
     username: user.username,
+    profileSlug: user.username,
     displayName: user.displayName,
     role: user.role,
   }));

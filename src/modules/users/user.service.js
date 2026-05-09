@@ -37,7 +37,7 @@ async function updateInvitationPolicy(userId, invitationPolicy) {
 }
 
 async function getPublicProfile(userId, viewerId) {
-  const user = await userRepository.findByUid(userId);
+  const user = await userRepository.findByPublicId(userId);
   if (!user) return null;
 
   const allTournaments = await tournamentRepository.findAll();

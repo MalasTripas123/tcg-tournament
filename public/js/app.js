@@ -124,7 +124,7 @@ function renderHeader() {
   const el = document.getElementById('header-auth');
   if (App.currentUser) {
     el.innerHTML = `
-      <a class="nav-link" onclick="openProfile('${App.currentUser.id}')" style="display:flex;align-items:center;gap:0.4rem;">
+      <a class="nav-link" onclick="openProfile('${profileSlug(App.currentUser)}')" style="display:flex;align-items:center;gap:0.4rem;">
         <div class="player-avatar" style="width:26px;height:26px;font-size:0.6rem;">${initials(App.currentUser.displayName)}</div>
         <span style="font-size:0.85rem;">${escHtml(App.currentUser.displayName)}</span>
         ${App.currentUser.role === 'organizer' ? '<span class="badge badge-gold">ORG</span>' : ''}
@@ -157,6 +157,22 @@ function copyLink(path) {
     // Fallback para entornos sin clipboard API
     prompt('Copia este link:', url);
   });
+}
+
+function profileSlug(user) {
+  return user?.profileSlug || user?.username || user?.id || user;
+}
+
+function extractProfileRef(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw, location.origin);
+    const parts = url.pathname.split('/').filter(Boolean);
+    const profileIndex = parts.indexOf('profile');
+    if (profileIndex !== -1 && parts[profileIndex + 1]) return decodeURIComponent(parts[profileIndex + 1]);
+  } catch {}
+  return raw.replace(/^@/, '').replace(/^\/?profile\//, '').trim();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -501,6 +517,14 @@ async function addPlayerToLobby(userId, displayName) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+async function addPlayerToLobbyByProfileLink() {
+  const input = document.getElementById('player-profile-link');
+  const profileRef = extractProfileRef(input?.value);
+  if (!profileRef) { toast('Pega un link de perfil o username', 'error'); return; }
+  await addPlayerToLobby(profileRef, profileRef);
+  if (input) input.value = '';
+}
+
 async function removePlayerFromLobby(userId) {
   try {
     const t = await api('/api/tournaments/' + App.currentTournamentId + '/players/' + userId, { method: 'DELETE' });
@@ -704,6 +728,7 @@ function renderRoundTimeControls(t, round) {
 
 function renderFinalResults(t, editable = false) {
   const finishedRounds = t.rounds.filter(r => r.status === 'finished');
+  const organizerRef = t.organizerUsername || t.organizerId;
   return `
     <div style="max-width:980px;margin:0 auto;">
       <button class="btn btn-ghost btn-sm" onclick="navigate('home')" style="margin-bottom:1.5rem;">Inicio</button>
@@ -712,6 +737,7 @@ function renderFinalResults(t, editable = false) {
           <div>
             <span class="badge badge-purple" style="margin-bottom:0.75rem;">Resultados finales</span>
             <h1 style="font-size:1.6rem;font-weight:700;margin:0 0 0.45rem;">${escHtml(t.name)}</h1>
+            <button class="organizer-link" onclick="openProfile('${organizerRef}')">Organizado por ${escHtml(t.organizerName)}</button>
             <div style="display:flex;gap:0.5rem;flex-wrap:wrap;color:var(--text-muted);font-size:0.88rem;">
               <span>${t.players.length} jugadores</span>
               <span>${finishedRounds.length}/${t.totalRounds} rondas</span>
@@ -814,7 +840,7 @@ function renderOrganizerView(t) {
             <option value="random" ${t.pairingMethod==='random'?'selected':''}>Random</option>
             <option value="balanced" ${t.pairingMethod==='balanced'?'selected':''}>Balanceado</option>
           </select>` : ''}
-          <button class="btn btn-ghost btn-sm" onclick="openProfile('${t.organizerId}')">Ver perfil</button>
+          <button class="btn btn-ghost btn-sm" onclick="openProfile('${t.organizerUsername || t.organizerId}')">Ver perfil</button>
           <button class="btn btn-ghost btn-sm" onclick="refreshTournament()">↻</button>
         </div>
       </div>
@@ -1174,6 +1200,10 @@ function renderPlayerControlPanel(t) {
       <input id="org-player-search" class="input" placeholder="Invitar o agregar jugador..." oninput="handleOrgPlayerSearch('${t.id}',this.value)" onblur="setTimeout(()=>hideOrgPlayerSearch(),200)" />
       <div id="org-player-search-dropdown" class="search-dropdown" style="display:none;"></div>
     </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <input id="org-player-profile-link" class="input" style="flex:1;min-width:180px;" placeholder="Pegar link de perfil o username..." />
+      <button class="btn btn-outline btn-sm" onclick="addPlayerFromOrganizerProfileLink('${t.id}')">Invitar por link</button>
+    </div>
     <div style="display:flex;flex-direction:column;gap:0.5rem;">${playerRows}</div>
   </div>`;
 }
@@ -1222,6 +1252,14 @@ async function addPlayerFromOrganizer(tid, userId) {
     renderOrganizerView(t);
     toast(invited ? 'Invitacion enviada' : 'Jugador agregado', invited ? 'info' : 'success');
   } catch(e) { toast(e.message, 'error'); }
+}
+
+async function addPlayerFromOrganizerProfileLink(tid) {
+  const input = document.getElementById('org-player-profile-link');
+  const profileRef = extractProfileRef(input?.value);
+  if (!profileRef) { toast('Pega un link de perfil o username', 'error'); return; }
+  await addPlayerFromOrganizer(tid, profileRef);
+  if (input) input.value = '';
 }
 
 async function toggleTournamentDisqualification(tid, userId, disqualified) {
@@ -1453,7 +1491,7 @@ function renderSpectatorView(t) {
               </span>
               ${t.isRanked?'<span class="badge badge-gold">⭐ Rankeado</span>':''}
               <span class="badge badge-gray">Min. ${t.minimumPlayers || (t.isRanked ? 8 : 2)} jugadores</span>
-              <a onclick="openProfile('${t.organizerId}')" style="font-size:0.82rem;color:var(--accent);cursor:pointer;">por ${escHtml(t.organizerName)}</a>
+              <a onclick="openProfile('${t.organizerUsername || t.organizerId}')" style="font-size:0.82rem;color:var(--accent);cursor:pointer;">por ${escHtml(t.organizerName)}</a>
             </div>
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.5rem;">
@@ -1723,14 +1761,15 @@ function renderStandings(players, tid, editable, rounds) {
 // ═══════════════════════════════════════════════════════════════
 async function openProfile(userId) {
   try {
-    const data = await api('/auth/profile/' + userId);
+    const data = await api('/auth/profile/' + encodeURIComponent(userId));
     renderProfileView(data);
-    navigate('profile', userId);
+    navigate('profile', profileSlug(data.user));
   } catch(e) { toast('No se pudo cargar el perfil', 'error'); }
 }
 
 function renderProfileView({ user, organizedActive, organizedFinished, playingIn, invitedTo = [], officialRanking = [] }) {
   const isOwn = App.currentUser?.id === user.id;
+  const canInviteFromProfile = App.currentUser?.role === 'organizer' && !isOwn && organizerLobbyTournamentsForInvite(user.id).length > 0;
   // Normalizar _id → id para compatibilidad con MongoDB
   const normalize = t => ({ ...t, id: t._id || t.id });
   organizedActive   = organizedActive.map(normalize);
@@ -1749,7 +1788,8 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
           ${isOwn?'<span class="badge badge-purple">Tú</span>':''}
         </div>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="copyLink('/profile/${user.id}')" title="Copiar link del perfil">
+      ${canInviteFromProfile ? `<button class="btn btn-primary btn-sm" onclick="inviteProfileUser('${user.id}')">Invitar a torneo</button>` : ''}
+      <button class="btn btn-ghost btn-sm" onclick="copyLink('/profile/${profileSlug(user)}')" title="Copiar link del perfil">
         🔗 Copiar link
       </button>
     </div>
@@ -1836,6 +1876,60 @@ function profileTRow(t, canManage) {
 // ═══════════════════════════════════════════════════════════════
 // TIMERS
 // ═══════════════════════════════════════════════════════════════
+function organizerLobbyTournamentsForInvite(userId) {
+  if (!App.currentUser || App.currentUser.role !== 'organizer') return [];
+  return (App.tournaments || []).filter(t =>
+    t.organizerId === App.currentUser.id &&
+    t.status === 'lobby' &&
+    !(t.players || []).some(player => player.userId === userId)
+  );
+}
+
+function inviteProfileUser(userId) {
+  const tournaments = organizerLobbyTournamentsForInvite(userId);
+  if (!tournaments.length) {
+    toast('No tienes torneos en lobby disponibles', 'error');
+    return;
+  }
+  if (tournaments.length === 1) {
+    sendProfileInvitation(tournaments[0].id, userId);
+    return;
+  }
+
+  showModal(`
+    <h2 style="font-size:1.2rem;font-weight:700;margin:0 0 0.25rem;">Invitar a torneo</h2>
+    <p style="color:var(--text-muted);font-size:0.9rem;margin:0 0 1rem;">Elige a cual torneo en lobby quieres invitar a este jugador.</p>
+    <div style="display:flex;flex-direction:column;gap:0.6rem;margin-bottom:1.25rem;">
+      ${tournaments.map(t => `
+        <label class="result-option">
+          <input type="radio" name="invite-tournament" value="${t.id}" />
+          <span style="flex:1;">${escHtml(t.name)}</span>
+          <span class="badge badge-gray">${t.players.length} jugadores</span>
+        </label>`).join('')}
+    </div>
+    <div style="display:flex;gap:0.75rem;">
+      <button class="btn btn-ghost" style="flex:1;" onclick="closeModal()">Volver</button>
+      <button class="btn btn-primary" style="flex:1;" onclick="confirmProfileInvitation('${userId}')">Enviar invitacion</button>
+    </div>`);
+}
+
+function confirmProfileInvitation(userId) {
+  const tournamentId = document.querySelector('input[name="invite-tournament"]:checked')?.value;
+  if (!tournamentId) { toast('Selecciona un torneo', 'error'); return; }
+  sendProfileInvitation(tournamentId, userId);
+}
+
+async function sendProfileInvitation(tournamentId, userId) {
+  try {
+    let t = await api('/api/tournaments/' + tournamentId + '/players', { method: 'POST', body: { userId } });
+    const invited = !!t.invited;
+    if (t.requested) t = await api('/api/tournaments/' + tournamentId);
+    _updateTournamentCache(t);
+    closeModal();
+    toast(invited ? 'Invitacion enviada' : 'Jugador agregado', invited ? 'info' : 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 function invitationRow(t) {
   return `
     <div class="card-elevated" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;">
@@ -1861,7 +1955,7 @@ async function answerInvitation(tournamentId, action) {
   try {
     await api('/api/tournaments/' + tournamentId + '/invitations/me', { method: 'PATCH', body: { action } });
     toast(action === 'accept' ? 'Invitacion aceptada' : 'Invitacion rechazada', action === 'accept' ? 'success' : 'info');
-    openProfile(App.currentUser.id);
+    openProfile(profileSlug(App.currentUser));
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -1944,8 +2038,10 @@ function handleHeaderSearch(q) {
   clearTimeout(_hsTimeout);
   const dd = document.getElementById('header-search-dropdown');
   if (q.length < 2) { dd.style.display='none'; return; }
-  _hsTimeout = setTimeout(() => {
+  _hsTimeout = setTimeout(async () => {
     const results = App.tournaments.filter(t => t.name.toLowerCase().includes(q.toLowerCase())).slice(0,6);
+    let userResults = [];
+    try { userResults = await api('/api/users/search?q=' + encodeURIComponent(q)); } catch {}
     dd.innerHTML = results.length
       ? results.map(t => `<div class="search-dropdown-item" onclick="hideHeaderSearch();openTournament('${t.id}')">
           <div style="flex:1;">
@@ -1955,6 +2051,18 @@ function handleHeaderSearch(q) {
           <span class="badge ${statusMeta(t.status).badge}">${statusMeta(t.status).label}</span>
         </div>`).join('')
       : '<div class="search-dropdown-empty">Sin resultados</div>';
+    if (results.length || userResults.length) {
+      const tournamentHtml = results.length ? '<div class="search-dropdown-empty" style="text-align:left;padding:0.45rem 0.75rem;">Torneos</div>' + dd.innerHTML : '';
+      const usersHtml = userResults.slice(0,4).map(u => `<div class="search-dropdown-item" onclick="hideHeaderSearch();openProfile('${profileSlug(u)}')">
+          <div class="player-avatar" style="width:28px;height:28px;font-size:0.6rem;">${initials(u.displayName)}</div>
+          <div style="flex:1;">
+            <div style="font-weight:600;font-size:0.88rem;">${escHtml(u.displayName)}</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);">@${escHtml(u.username)}</div>
+          </div>
+          <span class="badge badge-gold">Jugador</span>
+        </div>`).join('');
+      dd.innerHTML = tournamentHtml + (usersHtml ? '<div class="search-dropdown-empty" style="text-align:left;padding:0.45rem 0.75rem;">Jugadores</div>' + usersHtml : '');
+    }
     dd.style.display = 'block';
   }, 250);
 }
