@@ -1,13 +1,6 @@
-// models/User.js
-// Esquema de usuario en MongoDB.
-
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
-  // _id lo genera MongoDB automáticamente (ObjectId).
-  // Usamos un campo 'uid' propio para mantener compatibilidad
-  // con el código existente que usa strings como 'u1', 'u2', etc.
-  // En usuarios nuevos este campo será igual al _id.toString().
   uid: {
     type: String,
     required: true,
@@ -23,8 +16,6 @@ const userSchema = new mongoose.Schema({
   password: {
     type: String,
     required: true,
-    // En producción real: guardar el hash bcrypt, nunca el texto plano.
-    // Para este MVP lo dejamos en texto plano por simplicidad.
   },
   email: {
     type: String,
@@ -45,8 +36,20 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  invitationPolicy: {
+    type: String,
+    enum: ['manual', 'auto'],
+    default: 'manual',
+  },
+  rankings: [{
+    organizerId: { type: String, required: true },
+    organizerName: { type: String, default: '' },
+    points: { type: Number, default: 0 },
+    tournamentsPlayed: { type: Number, default: 0 },
+    _id: false,
+  }],
 }, {
-  timestamps: true, // añade createdAt y updatedAt automáticamente
+  timestamps: true,
 });
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = mongoose.models.User || mongoose.model('User', userSchema);
