@@ -50,6 +50,15 @@ async function resolveRoute(pathname) {
     return;
   }
 
+  if (section === 'login' || section === 'register') {
+    _showView('home');
+    loadTournaments();
+    if (section === 'login') showLoginModal();
+    else showRegisterModal();
+    history.replaceState({ view: 'home', modal: section }, '', '/' + section);
+    return;
+  }
+
   if (section === 'profile' && id) {
     try {
       const data = await api('/auth/profile/' + id);
@@ -123,8 +132,9 @@ async function fetchCurrentUser() {
 function renderHeader() {
   const el = document.getElementById('header-auth');
   if (App.currentUser) {
+    const slug = profileSlug(App.currentUser);
     el.innerHTML = `
-      <a class="nav-link" onclick="openProfile('${profileSlug(App.currentUser)}')" style="display:flex;align-items:center;gap:0.4rem;">
+      <a class="nav-link" href="/profile/${slug}" onclick="profileLinkClick(event,'${slug}')" style="display:flex;align-items:center;gap:0.4rem;">
         <div class="player-avatar" style="width:26px;height:26px;font-size:0.6rem;">${initials(App.currentUser.displayName)}</div>
         <span style="font-size:0.85rem;">${escHtml(App.currentUser.displayName)}</span>
         ${App.currentUser.role === 'organizer' ? '<span class="badge badge-gold">ORG</span>' : ''}
@@ -133,8 +143,8 @@ function renderHeader() {
     `;
   } else {
     el.innerHTML = `
-      <button class="btn btn-ghost btn-sm" onclick="showLoginModal()">Iniciar Sesión</button>
-      <button class="btn btn-outline btn-sm" onclick="showRegisterModal()">Registrarse</button>
+      <a class="btn btn-ghost btn-sm" href="/login" onclick="authLinkClick(event,'login')">Iniciar Sesión</a>
+      <a class="btn btn-outline btn-sm" href="/register" onclick="authLinkClick(event,'register')">Registrarse</a>
     `;
   }
 }
@@ -205,6 +215,41 @@ function navigate(view, id) {
   _showView(view);
   if (id) App.currentTournamentId = id;
   if (view === 'home') loadTournaments();
+}
+
+function isPlainLeftClick(event) {
+  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+}
+
+function navigateLink(event, view, id = null) {
+  if (!isPlainLeftClick(event)) return;
+  event.preventDefault();
+  navigate(view, id);
+}
+
+function profileLinkClick(event, userId) {
+  if (!isPlainLeftClick(event)) return;
+  event.preventDefault();
+  openProfile(userId);
+}
+
+function tournamentLinkClick(event, tournamentId) {
+  if (!isPlainLeftClick(event)) return;
+  event.preventDefault();
+  openTournament(tournamentId);
+}
+
+function createLinkClick(event) {
+  if (!isPlainLeftClick(event)) return;
+  event.preventDefault();
+  handleCreateTournament();
+}
+
+function authLinkClick(event, modal) {
+  if (!isPlainLeftClick(event)) return;
+  event.preventDefault();
+  if (modal === 'register') showRegisterModal();
+  else showLoginModal();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -305,7 +350,7 @@ function renderTournamentsList(list) {
     c.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:3rem;color:var(--text-hint);">
       <div style="font-size:3rem;margin-bottom:1rem;">♦</div>
       <p>No hay torneos todavía.</p>
-      <button class="btn btn-outline" onclick="handleCreateTournament()" style="margin-top:1rem;">Crear el primero</button>
+      <a class="btn btn-outline" href="/create" onclick="createLinkClick(event)" style="margin-top:1rem;">Crear el primero</a>
     </div>`; return;
   }
   const statusMap = { lobby:{l:'Lobby',b:'badge-gray'}, active:{l:'En curso',b:'badge-green'}, review:{l:'Revision',b:'badge-orange'}, finished:{l:'Finalizado',b:'badge-purple'} };
@@ -313,10 +358,9 @@ function renderTournamentsList(list) {
   c.innerHTML = list.map(t => {
     const s = statusMap[t.status] || statusMap.lobby;
     const isOrg = App.currentUser && t.organizerId === App.currentUser.id;
-    return `<div class="card" style="cursor:pointer;transition:border-color 0.2s,transform 0.15s;"
+    return `<a class="card tournament-card" href="/tournament/${t.id}" onclick="tournamentLinkClick(event,'${t.id}')" style="cursor:pointer;transition:border-color 0.2s,transform 0.15s;display:block;text-decoration:none;color:inherit;"
          onmouseenter="this.style.borderColor='var(--border-glow)';this.style.transform='translateY(-2px)'"
-         onmouseleave="this.style.borderColor='var(--border)';this.style.transform=''"
-         onclick="openTournament('${t.id}')">
+         onmouseleave="this.style.borderColor='var(--border)';this.style.transform=''">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.5rem;margin-bottom:0.75rem;">
         <h3 style="font-family:'Cinzel',serif;font-size:0.95rem;font-weight:600;margin:0;flex:1;line-height:1.3;">${escHtml(t.name)}</h3>
         <span class="badge ${s.b}">${s.l}</span>
@@ -331,7 +375,7 @@ function renderTournamentsList(list) {
         <span style="font-size:0.78rem;color:var(--text-hint);">por ${escHtml(t.organizerName)}</span>
         ${isOrg ? '<span class="badge badge-purple">Tu torneo</span>' : ''}
       </div>
-    </div>`;
+    </a>`;
   }).join('');
 }
 
@@ -731,13 +775,13 @@ function renderFinalResults(t, editable = false) {
   const organizerRef = t.organizerUsername || t.organizerId;
   return `
     <div style="max-width:980px;margin:0 auto;">
-      <button class="btn btn-ghost btn-sm" onclick="navigate('home')" style="margin-bottom:1.5rem;">Inicio</button>
+      <a class="btn btn-ghost btn-sm" href="/" onclick="navigateLink(event,'home')" style="margin-bottom:1.5rem;">Inicio</a>
       <div class="card card-accent-gold" style="margin-bottom:1.5rem;">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
           <div>
             <span class="badge badge-purple" style="margin-bottom:0.75rem;">Resultados finales</span>
             <h1 style="font-size:1.6rem;font-weight:700;margin:0 0 0.45rem;">${escHtml(t.name)}</h1>
-            <button class="organizer-link" onclick="openProfile('${organizerRef}')">Organizado por ${escHtml(t.organizerName)}</button>
+            <a class="organizer-link" href="/profile/${organizerRef}" onclick="profileLinkClick(event,'${organizerRef}')">Organizado por ${escHtml(t.organizerName)}</a>
             <div style="display:flex;gap:0.5rem;flex-wrap:wrap;color:var(--text-muted);font-size:0.88rem;">
               <span>${t.players.length} jugadores</span>
               <span>${finishedRounds.length}/${t.totalRounds} rondas</span>
@@ -804,7 +848,7 @@ function renderOrganizerView(t) {
       <!-- ENCABEZADO -->
       <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
         <div>
-          <button class="btn btn-ghost btn-sm" onclick="navigate('home')" style="margin-bottom:0.75rem;">← Inicio</button>
+          <a class="btn btn-ghost btn-sm" href="/" onclick="navigateLink(event,'home')" style="margin-bottom:0.75rem;">← Inicio</a>
           <h1 style="font-size:1.5rem;font-weight:700;margin:0 0 0.4rem;">${escHtml(t.name)}</h1>
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
             <span class="badge ${meta.badge}">${meta.label}</span>
@@ -840,7 +884,7 @@ function renderOrganizerView(t) {
             <option value="random" ${t.pairingMethod==='random'?'selected':''}>Random</option>
             <option value="balanced" ${t.pairingMethod==='balanced'?'selected':''}>Balanceado</option>
           </select>` : ''}
-          <button class="btn btn-ghost btn-sm" onclick="openProfile('${t.organizerUsername || t.organizerId}')">Ver perfil</button>
+          <a class="btn btn-ghost btn-sm" href="/profile/${t.organizerUsername || t.organizerId}" onclick="profileLinkClick(event,'${t.organizerUsername || t.organizerId}')">Ver perfil</a>
           <button class="btn btn-ghost btn-sm" onclick="refreshTournament()">↻</button>
         </div>
       </div>
@@ -1480,7 +1524,7 @@ function renderSpectatorView(t) {
 
   document.getElementById('spectator-content').innerHTML = `
     <div style="max-width:960px;margin:0 auto;">
-      <button class="btn btn-ghost btn-sm" onclick="navigate('home')" style="margin-bottom:1.5rem;">← Volver</button>
+      <a class="btn btn-ghost btn-sm" href="/" onclick="navigateLink(event,'home')" style="margin-bottom:1.5rem;">← Volver</a>
       <div class="card card-accent-left" style="margin-bottom:1.5rem;">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">
           <div>
@@ -1491,7 +1535,7 @@ function renderSpectatorView(t) {
               </span>
               ${t.isRanked?'<span class="badge badge-gold">⭐ Rankeado</span>':''}
               <span class="badge badge-gray">Min. ${t.minimumPlayers || (t.isRanked ? 8 : 2)} jugadores</span>
-              <a onclick="openProfile('${t.organizerUsername || t.organizerId}')" style="font-size:0.82rem;color:var(--accent);cursor:pointer;">por ${escHtml(t.organizerName)}</a>
+              <a href="/profile/${t.organizerUsername || t.organizerId}" onclick="profileLinkClick(event,'${t.organizerUsername || t.organizerId}')" style="font-size:0.82rem;color:var(--accent);cursor:pointer;">por ${escHtml(t.organizerName)}</a>
             </div>
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.5rem;">
@@ -1777,7 +1821,7 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
   playingIn         = playingIn.map(normalize);
   invitedTo         = invitedTo.map(normalize);
   document.getElementById('profile-content').innerHTML = `
-    <button class="btn btn-ghost btn-sm" onclick="navigate('home')" style="margin-bottom:1.5rem;">← Inicio</button>
+    <a class="btn btn-ghost btn-sm" href="/" onclick="navigateLink(event,'home')" style="margin-bottom:1.5rem;">← Inicio</a>
     <div class="card" style="display:flex;align-items:center;gap:1.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
       <div class="player-avatar" style="width:64px;height:64px;font-size:1.4rem;border:2px solid var(--accent);">${initials(user.displayName)}</div>
       <div style="flex:1;">
@@ -1858,8 +1902,8 @@ function profileTRow(t, canManage) {
   const sl = { lobby:'Lobby', active:'En curso', review:'Revision', finished:'Finalizado' };
   const tid = t._id || t.id;
   return `
-    <div class="card-elevated" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;cursor:pointer;"
-         onclick="openTournament('${tid}')"
+    <a class="card-elevated" href="/tournament/${tid}" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;cursor:pointer;text-decoration:none;color:inherit;"
+         onclick="tournamentLinkClick(event,'${tid}')"
          onmouseenter="this.style.borderColor='var(--border-glow)'" onmouseleave="this.style.borderColor='var(--border)'">
       <div style="flex:1;">
         <div style="font-weight:600;font-size:0.92rem;">${escHtml(t.name)}</div>
@@ -1870,7 +1914,7 @@ function profileTRow(t, canManage) {
       </div>
       <span class="badge ${sb[t.status]||'badge-gray'}">${sl[t.status]||t.status}</span>
       ${canManage?'<span class="badge badge-purple">Administrar →</span>':''}
-    </div>`;
+    </a>`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2043,24 +2087,24 @@ function handleHeaderSearch(q) {
     let userResults = [];
     try { userResults = await api('/api/users/search?q=' + encodeURIComponent(q)); } catch {}
     dd.innerHTML = results.length
-      ? results.map(t => `<div class="search-dropdown-item" onclick="hideHeaderSearch();openTournament('${t.id}')">
+      ? results.map(t => `<a class="search-dropdown-item" href="/tournament/${t.id}" onclick="hideHeaderSearch();tournamentLinkClick(event,'${t.id}')" style="text-decoration:none;color:inherit;">
           <div style="flex:1;">
             <div style="font-weight:600;font-size:0.88rem;">${escHtml(t.name)}</div>
             <div style="font-size:0.75rem;color:var(--text-muted);">${t.players.length} jug. · Ronda ${t.currentRound}/${t.totalRounds}</div>
           </div>
           <span class="badge ${statusMeta(t.status).badge}">${statusMeta(t.status).label}</span>
-        </div>`).join('')
+        </a>`).join('')
       : '<div class="search-dropdown-empty">Sin resultados</div>';
     if (results.length || userResults.length) {
       const tournamentHtml = results.length ? '<div class="search-dropdown-empty" style="text-align:left;padding:0.45rem 0.75rem;">Torneos</div>' + dd.innerHTML : '';
-      const usersHtml = userResults.slice(0,4).map(u => `<div class="search-dropdown-item" onclick="hideHeaderSearch();openProfile('${profileSlug(u)}')">
+      const usersHtml = userResults.slice(0,4).map(u => `<a class="search-dropdown-item" href="/profile/${profileSlug(u)}" onclick="hideHeaderSearch();profileLinkClick(event,'${profileSlug(u)}')" style="text-decoration:none;color:inherit;">
           <div class="player-avatar" style="width:28px;height:28px;font-size:0.6rem;">${initials(u.displayName)}</div>
           <div style="flex:1;">
             <div style="font-weight:600;font-size:0.88rem;">${escHtml(u.displayName)}</div>
             <div style="font-size:0.75rem;color:var(--text-muted);">@${escHtml(u.username)}</div>
           </div>
           <span class="badge badge-gold">Jugador</span>
-        </div>`).join('');
+        </a>`).join('');
       dd.innerHTML = tournamentHtml + (usersHtml ? '<div class="search-dropdown-empty" style="text-align:left;padding:0.45rem 0.75rem;">Jugadores</div>' + usersHtml : '');
     }
     dd.style.display = 'block';

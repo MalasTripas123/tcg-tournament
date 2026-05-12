@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TCG Arena — Tournament Manager</title>
+  <title>TCG Tournament</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/css/app.css" />
@@ -12,19 +12,19 @@
 
 <!-- HEADER -->
 <header id="app-header">
-  <div style="max-width:1200px;margin:0 auto;padding:0 1.5rem;height:60px;display:flex;align-items:center;justify-content:space-between;gap:1rem;">
-    <a class="nav-link" onclick="navigate('home')" style="font-family:'Cinzel',serif;color:var(--text-primary);font-size:1.05rem;font-weight:700;letter-spacing:0.1em;">
-      <span style="color:var(--accent)">♦</span> TCG ARENA
+  <div class="app-header-shell">
+    <a class="nav-link brand-link" href="/" onclick="navigateLink(event,'home')">
+      <span style="color:var(--accent)">♦</span> TCG TOURNAMENT
     </a>
-    <nav style="display:flex;align-items:center;gap:0.25rem;">
-      <a class="nav-link" onclick="navigate('home')">Torneos</a>
-      <div style="position:relative;">
-        <input id="header-search" class="input" placeholder="Buscar torneo..." style="width:190px;padding:0.4rem 0.8rem;font-size:0.85rem;"
+    <nav class="header-nav">
+      <a class="nav-link" href="/" onclick="navigateLink(event,'home')">Torneos</a>
+      <div class="header-search-wrap">
+        <input id="header-search" class="input header-search-input" placeholder="Buscar torneo o jugador..."
                oninput="handleHeaderSearch(this.value)" onblur="setTimeout(()=>hideHeaderSearch(),200)" />
-        <div id="header-search-dropdown" class="search-dropdown" style="display:none;width:280px;"></div>
+        <div id="header-search-dropdown" class="search-dropdown header-search-dropdown" style="display:none;"></div>
       </div>
     </nav>
-    <div id="header-auth" style="display:flex;align-items:center;gap:0.5rem;"></div>
+    <div id="header-auth" class="header-auth"></div>
   </div>
 </header>
 
@@ -39,7 +39,7 @@
         Gestiona tus<br /><span style="color:var(--accent)">Torneos TCG</span>
       </h1>
       <p style="color:var(--text-muted);font-size:1.05rem;max-width:460px;margin:0 auto 2rem;">Crea torneos, gestiona mesas, sigue el ranking en tiempo real.</p>
-      <button class="btn btn-primary btn-lg" onclick="handleCreateTournament()">♦ Crear Torneo</button>
+      <a class="btn btn-primary btn-lg" href="/create" onclick="createLinkClick(event)">♦ Crear Torneo</a>
     </div>
     <div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:0.75rem;">
@@ -53,7 +53,7 @@
   <!-- VIEW: CREATE -->
   <div id="view-create" class="view">
     <div style="max-width:620px;margin:0 auto;">
-      <button class="btn btn-ghost btn-sm" onclick="navigate('home')" style="margin-bottom:1.5rem;">← Volver</button>
+      <a class="btn btn-ghost btn-sm" href="/" onclick="navigateLink(event,'home')" style="margin-bottom:1.5rem;">← Volver</a>
       <h1 style="font-size:1.7rem;font-weight:700;margin:0 0 0.4rem;">Crear Torneo</h1>
       <p style="color:var(--text-muted);margin:0 0 2rem;">Configura los detalles de tu torneo.</p>
       <form id="create-form" onsubmit="submitCreateTournament(event)">
@@ -104,7 +104,7 @@
   <!-- VIEW: LOBBY -->
   <div id="view-lobby" class="view">
     <div style="max-width:700px;margin:0 auto;">
-      <button class="btn btn-ghost btn-sm" onclick="navigate('home')" style="margin-bottom:1.5rem;">← Inicio</button>
+      <a class="btn btn-ghost btn-sm" href="/" onclick="navigateLink(event,'home')" style="margin-bottom:1.5rem;">← Inicio</a>
       <div id="lobby-header" style="margin-bottom:1.5rem;"></div>
       <!-- Buscador -->
       <div style="margin-bottom:1.5rem;">
