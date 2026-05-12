@@ -203,14 +203,14 @@ function navigate(view, id) {
 
   // Actualizar título de la pestaña
   const titles = {
-    home: 'TCG Arena',
-    create: 'Crear Torneo — TCG Arena',
-    lobby: 'Lobby — TCG Arena',
-    organizer: 'Organizar — TCG Arena',
-    spectator: 'Torneo — TCG Arena',
-    profile: 'Perfil — TCG Arena',
+    home: 'TCG Tournament',
+    create: 'Crear Torneo - TCG Tournament',
+    lobby: 'Lobby - TCG Tournament',
+    organizer: 'Organizar - TCG Tournament',
+    spectator: 'Torneo - TCG Tournament',
+    profile: 'Perfil - TCG Tournament',
   };
-  document.title = titles[view] || 'TCG Arena';
+  document.title = titles[view] || 'TCG Tournament';
 
   _showView(view);
   if (id) App.currentTournamentId = id;
