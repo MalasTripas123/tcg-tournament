@@ -48,6 +48,14 @@ const userSchema = new mongoose.Schema({
     tournamentsPlayed: { type: Number, default: 0 },
     _id: false,
   }],
+  anonymousRankings: [{
+    userId: { type: String, required: true },
+    anonymousKey: { type: String, required: true },
+    displayName: { type: String, required: true },
+    points: { type: Number, default: 0 },
+    tournamentsPlayed: { type: Number, default: 0 },
+    _id: false,
+  }],
 }, {
   timestamps: true,
 });

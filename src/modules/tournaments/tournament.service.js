@@ -6,7 +6,8 @@ const tournamentRepository = require('./tournament.repository');
 const policies = require('./tournament.policies');
 const { generateRound, redistributePlayers } = require('./domain/matchmaking');
 const { accumulateRoundScores, inferTableResult } = require('./domain/scoring');
-const { RANKING_FORMULA_VERSION, calculateRankingDeltas, invertDeltas } = require('./domain/ranking');
+const { RANKING_FORMULA_VERSION, calculateRankingDeltas } = require('./domain/ranking');
+const { anonymousPlayerIdentity } = require('./domain/anonymousPlayers');
 const {
   findRound,
   findTable,
@@ -61,16 +62,33 @@ async function createTournament(data, organizerId) {
   });
 }
 
-async function addPlayer(tournamentId, sessionUserId, requestedUserId) {
+async function addPlayer(tournamentId, sessionUserId, playerRequest = {}) {
   const tournament = await loadTournament(tournamentId);
-  assertStatus(tournament, ['lobby', 'active'], 'El torneo ya finalizo');
 
   const requesterIsOrganizer = policies.isOrganizer(tournament, sessionUserId);
-  const targetUserId = requesterIsOrganizer ? requestedUserId : sessionUserId;
+  assertStatus(
+    tournament,
+    requesterIsOrganizer ? ['lobby', 'active'] : ['lobby'],
+    requesterIsOrganizer ? 'El torneo ya finalizo' : 'Solo puedes inscribirte durante el lobby'
+  );
+  const request = typeof playerRequest === 'string' ? { userId: playerRequest } : (playerRequest || {});
+
+  if (request.anonymousName) {
+    if (!requesterIsOrganizer) throw ApiError.forbidden('Solo el organizador puede agregar jugadores anonimos');
+    const anonymousPlayer = anonymousPlayerIdentity(tournament.organizerId, request.anonymousName);
+    if (!anonymousPlayer) throw ApiError.badRequest('Nombre anonimo invalido');
+    if (tournament.players.some(player => player.userId === anonymousPlayer.uid)) {
+      throw ApiError.conflict('El jugador ya esta en el torneo');
+    }
+    addPlayerToTournament(tournament, anonymousPlayer);
+    return save(tournament);
+  }
+
+  const targetUserId = requesterIsOrganizer ? request.userId : sessionUserId;
   const user = await userRepository.findByPublicId(targetUserId);
   if (!user) throw ApiError.notFound('Jugador no encontrado');
 
-  if (tournament.players.some(player => player.userId === targetUserId)) {
+  if (tournament.players.some(player => player.userId === user.uid)) {
     throw ApiError.conflict('El jugador ya esta en el torneo');
   }
 
@@ -115,9 +133,11 @@ async function setPlayerScore(tournamentId, organizerId, userId, score) {
   assertStatus(tournament, ['lobby', 'active', 'review', 'finished'], 'Estado de torneo invalido');
   const player = tournament.players.find(p => p.userId === userId);
   if (!player) throw ApiError.notFound('Jugador no encontrado');
-  player.score = normalizeNonNegativeInt(score);
-  if (tournament.status === 'finished') await refreshRanking(tournament);
-  return save(tournament);
+  setManualTotalScore(tournament, player, score);
+  if (tournament.status === 'finished') updateRankingSnapshot(tournament);
+  const saved = await save(tournament);
+  if (tournament.status === 'finished') await rebuildOrganizerRanking(tournament.organizerId);
+  return saved;
 }
 
 async function handleJoinRequest(tournamentId, organizerId, userId, action) {
@@ -178,6 +198,52 @@ async function startTournament(tournamentId, organizerId) {
   });
 
   return save(tournament);
+}
+
+async function listOrganizerPlayerSuggestions(tournamentId, organizerId) {
+  const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
+  const tournaments = await tournamentRepository.findAll();
+  const currentPlayerIds = new Set(tournament.players.map(player => player.userId));
+  const pendingPlayerIds = new Set(
+    (tournament.joinRequests || [])
+      .filter(request => request.status === 'pending')
+      .map(request => request.userId)
+  );
+  const currentTournamentId = tournament._id || tournament.id;
+  const suggestionsById = new Map();
+
+  for (const playedTournament of tournaments) {
+    const playedTournamentId = playedTournament._id || playedTournament.id;
+    if (playedTournament.organizerId !== organizerId || playedTournamentId === currentTournamentId) continue;
+    const playedAt = playedTournament.updatedAt || playedTournament.createdAt || 0;
+
+    for (const player of playedTournament.players || []) {
+      if (!player.userId || currentPlayerIds.has(player.userId) || pendingPlayerIds.has(player.userId)) continue;
+      const existing = suggestionsById.get(player.userId) || {
+        userId: player.userId,
+        displayName: player.displayName,
+        isAnonymous: !!player.isAnonymous,
+        anonymousKey: player.anonymousKey || '',
+        anonymousName: player.isAnonymous ? player.displayName : '',
+        tournamentsPlayed: 0,
+        lastPlayedAt: playedAt,
+      };
+      existing.tournamentsPlayed += 1;
+      if (new Date(playedAt).getTime() >= new Date(existing.lastPlayedAt || 0).getTime()) {
+        existing.displayName = player.displayName;
+        existing.anonymousName = player.isAnonymous ? player.displayName : '';
+        existing.lastPlayedAt = playedAt;
+      }
+      suggestionsById.set(player.userId, existing);
+    }
+  }
+
+  return [...suggestionsById.values()]
+    .sort((a, b) => {
+      if (b.tournamentsPlayed !== a.tournamentsPlayed) return b.tournamentsPlayed - a.tournamentsPlayed;
+      return new Date(b.lastPlayedAt || 0).getTime() - new Date(a.lastPlayedAt || 0).getTime();
+    })
+    .slice(0, 16);
 }
 
 async function replaceRoundTables(tournamentId, organizerId, roundId, tables) {
@@ -398,6 +464,8 @@ async function shuffleRoundPlayers(tournamentId, organizerId, roundId) {
     normalTables[i].players = (redistributed[i] || []).map(player => ({
       userId: player.userId,
       displayName: player.displayName,
+      isAnonymous: !!player.isAnonymous,
+      anonymousKey: player.anonymousKey || '',
       score: player.tableScore || 0,
       eliminated: false,
       startScore: player.startScore ?? tournamentPlayerById.get(player.userId)?.score ?? 0,
@@ -413,14 +481,16 @@ async function setTournamentPlayerStatus(tournamentId, organizerId, userId, data
   const player = tournament.players.find(p => p.userId === userId);
   if (!player) throw ApiError.notFound('Jugador no encontrado');
 
-  if (data.score !== undefined) player.score = normalizeNonNegativeInt(data.score);
+  if (data.score !== undefined) setManualTotalScore(tournament, player, data.score);
   if (data.disqualified !== undefined) {
     if (data.disqualified) disqualifyPlayer(tournament, player);
     else reinstatePlayer(tournament, player);
   }
 
-  if (tournament.status === 'finished') await refreshRanking(tournament);
-  return save(tournament);
+  if (tournament.status === 'finished') updateRankingSnapshot(tournament);
+  const saved = await save(tournament);
+  if (tournament.status === 'finished') await rebuildOrganizerRanking(tournament.organizerId);
+  return saved;
 }
 
 async function reviseTable(tournamentId, organizerId, roundId, tableId, data) {
@@ -433,8 +503,10 @@ async function reviseTable(tournamentId, organizerId, roundId, tableId, data) {
   table.players = mergePlayerScores(table.players, data.players);
   applyExplicitResult(table, data);
   recomputeTournamentRecords(tournament);
-  if (tournament.status === 'finished') await refreshRanking(tournament);
-  return save(tournament);
+  if (tournament.status === 'finished') updateRankingSnapshot(tournament);
+  const saved = await save(tournament);
+  if (tournament.status === 'finished') await rebuildOrganizerRanking(tournament.organizerId);
+  return saved;
 }
 
 async function finalizeTournamentResults(tournamentId, organizerId) {
@@ -445,16 +517,35 @@ async function finalizeTournamentResults(tournamentId, organizerId) {
 
   recomputeTournamentRecords(tournament);
   tournament.status = 'finished';
-  await refreshRanking(tournament);
-  return save(tournament);
+  updateRankingSnapshot(tournament);
+  const saved = await save(tournament);
+  await rebuildOrganizerRanking(tournament.organizerId);
+  return saved;
 }
 
 async function ensureOrganizerRankingsCurrent(organizerId) {
   const tournaments = await tournamentRepository.findAll();
   for (const tournament of tournaments) {
-    if (tournament.organizerId !== organizerId) continue;
+    if (tournament.organizerId !== organizerId || tournament.status !== 'finished' || !tournament.isRanked) continue;
     normalizeTournament(tournament);
-    if (needsRankingRefresh(tournament)) await ensureRankingCurrent(tournament);
+    recomputeTournamentRecords(tournament);
+    updateRankingSnapshot(tournament);
+    await save(tournament);
+  }
+  await rebuildOrganizerRanking(organizerId);
+}
+
+async function rebuildAllOrganizerRankings() {
+  const tournaments = await tournamentRepository.findAll();
+  const organizerIds = new Set(
+    tournaments
+      .filter(tournament => tournament.status === 'finished' && tournament.isRanked)
+      .map(tournament => tournament.organizerId)
+      .filter(Boolean)
+  );
+
+  for (const organizerId of organizerIds) {
+    await ensureOrganizerRankingsCurrent(organizerId);
   }
 }
 
@@ -477,7 +568,10 @@ function playerEntry(user) {
   return {
     userId: user.uid,
     displayName: user.displayName,
+    isAnonymous: !!user.isAnonymous,
+    anonymousKey: user.anonymousKey || '',
     score: 0,
+    manualScore: 0,
     wins: 0,
     losses: 0,
     draws: 0,
@@ -512,14 +606,17 @@ function createInvitation(tournament, user, organizerId) {
 }
 
 function addPlayerToTournament(tournament, user) {
-  tournament.players.push(playerEntry(user));
+  const player = playerEntry(user);
+  tournament.players.push(player);
   if (tournament.status === 'active') {
     const round = currentOpenRound(tournament);
     if (round) {
       ensureBench(round);
       getBench(round).players.push({
-        userId: user.uid,
-        displayName: user.displayName,
+        userId: player.userId,
+        displayName: player.displayName,
+        isAnonymous: player.isAnonymous,
+        anonymousKey: player.anonymousKey,
         score: 0,
         eliminated: false,
         startScore: 0,
@@ -545,6 +642,7 @@ function normalizeTournament(tournament) {
     round.tableEditingUnlocked = !!round.tableEditingUnlocked;
     ensureBench(round);
   }
+  for (const player of tournament.players) normalizePlayerManualScore(tournament, player);
 }
 
 function normalizeRoundDuration(value) {
@@ -660,6 +758,8 @@ function prepareNextRound(tournament) {
     .map(player => ({
       userId: player.userId,
       displayName: player.displayName,
+      isAnonymous: !!player.isAnonymous,
+      anonymousKey: player.anonymousKey || '',
       score: 0,
       eliminated: true,
       startScore: player.score || 0,
@@ -707,11 +807,20 @@ function reinstatePlayer(tournament, player) {
   const round = currentOpenRound(tournament);
   if (round) {
     ensureBench(round);
-    const alreadyInRound = round.tables.some(table => table.players.some(p => p.userId === player.userId));
+    let alreadyInRound = false;
+    for (const table of round.tables) {
+      const tablePlayer = table.players.find(p => p.userId === player.userId);
+      if (tablePlayer) {
+        tablePlayer.eliminated = false;
+        alreadyInRound = true;
+      }
+    }
     if (!alreadyInRound) {
       getBench(round).players.push({
         userId: player.userId,
         displayName: player.displayName,
+        isAnonymous: !!player.isAnonymous,
+        anonymousKey: player.anonymousKey || '',
         score: 0,
         eliminated: false,
         startScore: player.score || 0,
@@ -722,7 +831,8 @@ function reinstatePlayer(tournament, player) {
 
 function recomputeTournamentRecords(tournament) {
   for (const player of tournament.players) {
-    player.score = 0;
+    normalizePlayerManualScore(tournament, player);
+    player.score = player.manualScore;
     player.wins = 0;
     player.losses = 0;
     player.draws = 0;
@@ -732,16 +842,81 @@ function recomputeTournamentRecords(tournament) {
   }
 }
 
-async function refreshRanking(tournament) {
-  if (!tournament.isRanked) return;
-  if (tournament.rankingApplied && tournament.rankingDeltas?.length) {
-    await userRepository.applyRankingDeltas(tournament.organizerId, tournament.organizerName, invertDeltas(tournament.rankingDeltas));
+function normalizePlayerManualScore(tournament, player) {
+  const currentManualScore = Number(player.manualScore);
+  if (Number.isFinite(currentManualScore)) {
+    player.manualScore = currentManualScore;
+    return;
   }
+
+  const currentScore = Number(player.score);
+  player.manualScore = Number.isFinite(currentScore)
+    ? currentScore - finishedRoundScoreForPlayer(tournament, player.userId)
+    : 0;
+}
+
+function setManualTotalScore(tournament, player, score) {
+  const totalScore = normalizeNonNegativeInt(score);
+  player.manualScore = totalScore - finishedRoundScoreForPlayer(tournament, player.userId);
+  player.score = totalScore;
+}
+
+function finishedRoundScoreForPlayer(tournament, userId) {
+  let score = 0;
+  for (const round of tournament.rounds || []) {
+    if (round.status !== 'finished') continue;
+    for (const table of round.tables || []) {
+      if (table.type === 'bench') continue;
+      const tablePlayer = (table.players || []).find(player => player.userId === userId);
+      if (tablePlayer) score += tablePlayer.score || 0;
+    }
+  }
+  return score;
+}
+
+function updateRankingSnapshot(tournament) {
+  if (!tournament.isRanked) return;
   const deltas = calculateRankingDeltas(tournament);
-  await userRepository.applyRankingDeltas(tournament.organizerId, tournament.organizerName, deltas);
-  tournament.rankingDeltas = deltas.map(delta => ({ userId: delta.userId, points: delta.points, rank: delta.rank }));
+  tournament.rankingDeltas = deltas.map(delta => ({
+    userId: delta.userId,
+    displayName: delta.displayName || '',
+    isAnonymous: !!delta.isAnonymous,
+    anonymousKey: delta.anonymousKey || '',
+    points: delta.points,
+    rank: delta.rank,
+  }));
   tournament.rankingApplied = true;
   tournament.rankingFormulaVersion = RANKING_FORMULA_VERSION;
+}
+
+async function rebuildOrganizerRanking(organizerId) {
+  const tournaments = await tournamentRepository.findAll();
+  const byUser = new Map();
+  let organizerName = '';
+
+  for (const tournament of tournaments) {
+    if (tournament.organizerId !== organizerId || tournament.status !== 'finished' || !tournament.isRanked) continue;
+    normalizeTournament(tournament);
+    recomputeTournamentRecords(tournament);
+    organizerName = tournament.organizerName || organizerName;
+
+    for (const delta of calculateRankingDeltas(tournament)) {
+      const entry = byUser.get(delta.userId) || {
+        userId: delta.userId,
+        displayName: delta.displayName || '',
+        isAnonymous: !!delta.isAnonymous,
+        anonymousKey: delta.anonymousKey || '',
+        points: 0,
+        tournamentsPlayed: 0,
+      };
+      entry.displayName = delta.displayName || entry.displayName;
+      entry.points += delta.points || 0;
+      entry.tournamentsPlayed += 1;
+      byUser.set(delta.userId, entry);
+    }
+  }
+
+  await userRepository.replaceOrganizerRanking(organizerId, organizerName, [...byUser.values()]);
 }
 
 function needsRankingRefresh(tournament) {
@@ -754,8 +929,10 @@ function needsRankingRefresh(tournament) {
 
 async function ensureRankingCurrent(tournament) {
   if (!needsRankingRefresh(tournament)) return tournament;
-  await refreshRanking(tournament);
-  return save(tournament);
+  updateRankingSnapshot(tournament);
+  const saved = await save(tournament);
+  await rebuildOrganizerRanking(tournament.organizerId);
+  return saved;
 }
 
 async function save(tournament) {
@@ -771,6 +948,7 @@ module.exports = {
   setPlayerScore,
   handleJoinRequest,
   startTournament,
+  listOrganizerPlayerSuggestions,
   replaceRoundTables,
   updateTablePlayer,
   activateRound,
@@ -789,4 +967,5 @@ module.exports = {
   reviseTable,
   finalizeTournamentResults,
   ensureOrganizerRankingsCurrent,
+  rebuildAllOrganizerRankings,
 };

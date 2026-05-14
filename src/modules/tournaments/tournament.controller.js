@@ -28,11 +28,16 @@ async function addPlayer(req, res) {
   const result = await tournamentService.addPlayer(
     req.params.id,
     req.session.userId,
-    req.validated.body.userId
+    req.validated.body
   );
 
   if (result.requested) return ok(res, { ok: true, requested: true, invited: !!result.invited, message: result.message });
   return ok(res, presentTournament(result, viewer(req)));
+}
+
+async function playerSuggestions(req, res) {
+  const suggestions = await tournamentService.listOrganizerPlayerSuggestions(req.params.id, req.session.userId);
+  return ok(res, suggestions);
 }
 
 async function removePlayer(req, res) {
@@ -203,6 +208,7 @@ module.exports = {
   detail,
   create,
   addPlayer,
+  playerSuggestions,
   removePlayer,
   setPlayerScore,
   handleJoinRequest,

@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const tablePlayerSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   displayName: { type: String, required: true },
+  isAnonymous: { type: Boolean, default: false },
+  anonymousKey: { type: String, default: '' },
   score: { type: Number, default: 0 },
   eliminated: { type: Boolean, default: false },
   startScore: { type: Number, default: 0 },
@@ -43,7 +45,10 @@ const roundSchema = new mongoose.Schema({
 const tournamentPlayerSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   displayName: { type: String, required: true },
+  isAnonymous: { type: Boolean, default: false },
+  anonymousKey: { type: String, default: '' },
   score: { type: Number, default: 0 },
+  manualScore: { type: Number, default: 0 },
   wins: { type: Number, default: 0 },
   losses: { type: Number, default: 0 },
   draws: { type: Number, default: 0 },
@@ -82,6 +87,9 @@ const tournamentSchema = new mongoose.Schema({
   rankingFormulaVersion: { type: Number, default: 0 },
   rankingDeltas: [{
     userId: { type: String, required: true },
+    displayName: { type: String, default: '' },
+    isAnonymous: { type: Boolean, default: false },
+    anonymousKey: { type: String, default: '' },
     points: { type: Number, default: 0 },
     rank: { type: Number, default: 0 },
     _id: false,

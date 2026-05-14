@@ -13,6 +13,9 @@ function calculateRankingDeltas(tournament) {
     const rank = index + 1;
     return {
       userId: player.userId,
+      displayName: player.displayName,
+      isAnonymous: !!player.isAnonymous,
+      anonymousKey: player.anonymousKey || '',
       rank,
       points: pointsForRank(rank, total),
       countTournament: 1,
@@ -42,18 +45,8 @@ function pointsForRank(rank, total) {
   return points;
 }
 
-function invertDeltas(deltas) {
-  return (deltas || []).map(delta => ({
-    userId: delta.userId,
-    rank: delta.rank,
-    points: -delta.points,
-    countTournament: -1,
-  }));
-}
-
 module.exports = {
   RANKING_FORMULA_VERSION,
   calculateRankingDeltas,
   pointsForRank,
-  invertDeltas,
 };

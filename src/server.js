@@ -2,10 +2,12 @@ const { env } = require('./config/env');
 const { connectDB } = require('./config/db');
 const { createApp } = require('./app');
 const { seedUsers } = require('./modules/users/user.service');
+const tournamentService = require('./modules/tournaments/tournament.service');
 
 async function start() {
   await connectDB();
   await seedUsers();
+  await tournamentService.rebuildAllOrganizerRankings();
 
   const app = createApp();
   app.listen(env.port, () => {

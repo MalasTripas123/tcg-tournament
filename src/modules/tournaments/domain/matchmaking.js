@@ -59,6 +59,8 @@ function createTable(index, players) {
     players: players.map(player => ({
       userId: player.userId,
       displayName: player.displayName,
+      isAnonymous: !!player.isAnonymous,
+      anonymousKey: player.anonymousKey || '',
       score: 0,
       eliminated: false,
       startScore: player.score || 0,

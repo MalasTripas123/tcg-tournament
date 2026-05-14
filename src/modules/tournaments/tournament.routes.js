@@ -9,6 +9,7 @@ const router = express.Router();
 
 router.get('/', asyncHandler(controller.list));
 router.post('/', requireAuth, validateRequest(validators.validateCreateTournament), asyncHandler(controller.create));
+router.get('/:id/player-suggestions', requireAuth, asyncHandler(controller.playerSuggestions));
 router.get('/:id', asyncHandler(controller.detail));
 
 router.post('/:id/players', requireAuth, validateRequest(validators.validateAddPlayer), asyncHandler(controller.addPlayer));

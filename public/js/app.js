@@ -134,7 +134,7 @@ function renderHeader() {
   if (App.currentUser) {
     const slug = profileSlug(App.currentUser);
     el.innerHTML = `
-      <a class="nav-link" href="/profile/${slug}" onclick="profileLinkClick(event,'${slug}')" style="display:flex;align-items:center;gap:0.4rem;">
+      <a class="nav-link" href="${profileHref(slug)}" onclick="profileLinkClick(event,'${jsAttr(slug)}')" style="display:flex;align-items:center;gap:0.4rem;">
         <div class="player-avatar" style="width:26px;height:26px;font-size:0.6rem;">${initials(App.currentUser.displayName)}</div>
         <span style="font-size:0.85rem;">${escHtml(App.currentUser.displayName)}</span>
         ${App.currentUser.role === 'organizer' ? '<span class="badge badge-gold">ORG</span>' : ''}
@@ -183,6 +183,32 @@ function extractProfileRef(value) {
     if (profileIndex !== -1 && parts[profileIndex + 1]) return decodeURIComponent(parts[profileIndex + 1]);
   } catch {}
   return raw.replace(/^@/, '').replace(/^\/?profile\//, '').trim();
+}
+
+function pathSegment(value) {
+  return encodeURIComponent(String(value ?? ''));
+}
+
+function profileHref(userOrSlug) {
+  return '/profile/' + pathSegment(profileSlug(userOrSlug));
+}
+
+function tournamentHref(id) {
+  return '/tournament/' + pathSegment(id);
+}
+
+function anonymousBadge(item) {
+  return item?.isAnonymous ? '<span class="badge badge-gray">Anonimo</span>' : '';
+}
+
+function jsAttr(value) {
+  return escHtml(String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029'));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -358,7 +384,7 @@ function renderTournamentsList(list) {
   c.innerHTML = list.map(t => {
     const s = statusMap[t.status] || statusMap.lobby;
     const isOrg = App.currentUser && t.organizerId === App.currentUser.id;
-    return `<a class="card tournament-card" href="/tournament/${t.id}" onclick="tournamentLinkClick(event,'${t.id}')" style="cursor:pointer;transition:border-color 0.2s,transform 0.15s;display:block;text-decoration:none;color:inherit;"
+    return `<a class="card tournament-card" href="${tournamentHref(t.id)}" onclick="tournamentLinkClick(event,'${jsAttr(t.id)}')" style="cursor:pointer;transition:border-color 0.2s,transform 0.15s;display:block;text-decoration:none;color:inherit;"
          onmouseenter="this.style.borderColor='var(--border-glow)';this.style.transform='translateY(-2px)'"
          onmouseleave="this.style.borderColor='var(--border)';this.style.transform=''">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.5rem;margin-bottom:0.75rem;">
@@ -474,6 +500,7 @@ function renderLobby(t) {
     </div>`;
   renderLobbyRequests(t);
   renderLobbyPlayers(t);
+  renderLobbyPlayerSuggestions(t);
 }
 
 function renderLobbyRequests(t) {
@@ -506,10 +533,34 @@ function renderLobbyPlayers(t) {
         <span style="font-family:'Cinzel',serif;font-size:0.78rem;color:var(--text-hint);min-width:1.5rem;">#${i+1}</span>
         <div class="player-avatar">${initials(p.displayName)}</div>
         <span style="flex:1;font-weight:600;">${escHtml(p.displayName)}</span>
-        <button class="btn btn-danger btn-sm" onclick="removePlayerFromLobby('${p.userId}')">Quitar</button>
+        ${anonymousBadge(p)}
+        <button class="btn btn-danger btn-sm" onclick="removePlayerFromLobby('${jsAttr(p.userId)}')">Quitar</button>
       </div>`).join('');
   }
   document.getElementById('btn-start-tournament').disabled = t.players.length < (t.minimumPlayers || (t.isRanked ? 8 : 2));
+}
+
+async function renderLobbyPlayerSuggestions(t) {
+  const el = document.getElementById('lobby-player-suggestions');
+  if (!el) return;
+  el.innerHTML = '<div class="card-elevated" style="padding:0.8rem;color:var(--text-hint);font-size:0.9rem;">Cargando jugadores frecuentes...</div>';
+  try {
+    const suggestions = await api('/api/tournaments/' + t.id + '/player-suggestions');
+    if (!suggestions.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `
+      <span class="section-title">Jugadores recientes y frecuentes</span>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+        ${suggestions.map(s => `
+          <button type="button" class="btn btn-ghost btn-sm" style="display:flex;align-items:center;gap:0.45rem;"
+                  onclick="addPlayerSuggestionToLobby('${s.isAnonymous ? 'anonymous' : 'user'}','${jsAttr(s.userId)}','${jsAttr(s.anonymousName || s.displayName)}')">
+            <span>${escHtml(s.displayName)}</span>
+            ${anonymousBadge(s)}
+            <span style="font-size:0.72rem;color:var(--text-muted);">${s.tournamentsPlayed} torneos</span>
+          </button>`).join('')}
+      </div>`;
+  } catch {
+    el.innerHTML = '';
+  }
 }
 
 // Player search in lobby
@@ -556,9 +607,28 @@ async function addPlayerToLobby(userId, displayName) {
     if (t.requested) t = await api('/api/tournaments/' + App.currentTournamentId);
     _updateTournamentCache(t);
     renderLobbyRequests(t); renderLobbyPlayers(t);
+    renderLobbyPlayerSuggestions(t);
     document.getElementById('player-search').value = ''; hidePlayerSearch();
     toast(wasInvite ? 'Invitacion enviada' : (displayName || 'Jugador') + ' agregado', wasInvite ? 'info' : 'success');
   } catch(e) { toast(e.message, 'error'); }
+}
+
+async function addAnonymousPlayerToLobby(name = null) {
+  const input = document.getElementById('anonymous-player-name');
+  const anonymousName = (name || input?.value || '').trim();
+  if (!anonymousName) { toast('Ingresa un nombre anonimo', 'error'); return; }
+  try {
+    const t = await api('/api/tournaments/' + App.currentTournamentId + '/players', { method: 'POST', body: { anonymousName } });
+    _updateTournamentCache(t);
+    renderLobbyRequests(t); renderLobbyPlayers(t); renderLobbyPlayerSuggestions(t);
+    if (input && !name) input.value = '';
+    toast('Jugador anonimo agregado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function addPlayerSuggestionToLobby(kind, userId, anonymousName) {
+  if (kind === 'anonymous') return addAnonymousPlayerToLobby(anonymousName);
+  return addPlayerToLobby(userId, anonymousName);
 }
 
 async function addPlayerToLobbyByProfileLink() {
@@ -571,8 +641,8 @@ async function addPlayerToLobbyByProfileLink() {
 
 async function removePlayerFromLobby(userId) {
   try {
-    const t = await api('/api/tournaments/' + App.currentTournamentId + '/players/' + userId, { method: 'DELETE' });
-    _updateTournamentCache(t); renderLobbyPlayers(t);
+    const t = await api('/api/tournaments/' + App.currentTournamentId + '/players/' + encodeURIComponent(userId), { method: 'DELETE' });
+    _updateTournamentCache(t); renderLobbyPlayers(t); renderLobbyPlayerSuggestions(t);
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -781,14 +851,14 @@ function renderFinalResults(t, editable = false) {
           <div>
             <span class="badge badge-purple" style="margin-bottom:0.75rem;">Resultados finales</span>
             <h1 style="font-size:1.6rem;font-weight:700;margin:0 0 0.45rem;">${escHtml(t.name)}</h1>
-            <a class="organizer-link" href="/profile/${organizerRef}" onclick="profileLinkClick(event,'${organizerRef}')">Organizado por ${escHtml(t.organizerName)}</a>
+            <a class="organizer-link" href="${profileHref(organizerRef)}" onclick="profileLinkClick(event,'${jsAttr(organizerRef)}')">Organizado por ${escHtml(t.organizerName)}</a>
             <div style="display:flex;gap:0.5rem;flex-wrap:wrap;color:var(--text-muted);font-size:0.88rem;">
               <span>${t.players.length} jugadores</span>
               <span>${finishedRounds.length}/${t.totalRounds} rondas</span>
               <span>${t.isRanked ? 'Torneo oficial' : 'Torneo normal'}</span>
             </div>
           </div>
-          <button class="btn btn-ghost btn-sm" onclick="copyLink('/tournament/${t.id}')">Copiar link</button>
+          <button class="btn btn-ghost btn-sm" onclick="copyLink('${jsAttr(tournamentHref(t.id))}')">Copiar link</button>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:1.5rem;align-items:start;" class="two-col">
@@ -801,7 +871,8 @@ function renderFinalResults(t, editable = false) {
             <span class="section-title">Puntos ganados/perdidos</span>
             ${(t.rankingDeltas || []).length ? (t.rankingDeltas || []).map(delta => `
               <div style="display:flex;align-items:center;justify-content:space-between;padding:0.45rem 0;border-bottom:1px solid var(--border);">
-                <span style="font-weight:600;">#${delta.rank} ${escHtml((t.players.find(p => p.userId === delta.userId) || {}).displayName || delta.userId)}</span>
+                <span style="font-weight:600;">#${delta.rank} ${escHtml((t.players.find(p => p.userId === delta.userId) || {}).displayName || delta.displayName || delta.userId)}</span>
+                ${anonymousBadge(delta)}
                 <span class="badge ${delta.points >= 0 ? 'badge-green' : 'badge-red'}">${delta.points >= 0 ? '+' : ''}${delta.points} pts</span>
               </div>`).join('') : '<p style="color:var(--text-hint);font-size:0.9rem;">Puntos pendientes hasta publicar resultados.</p>'}
           </div>` : ''}
@@ -884,7 +955,7 @@ function renderOrganizerView(t) {
             <option value="random" ${t.pairingMethod==='random'?'selected':''}>Random</option>
             <option value="balanced" ${t.pairingMethod==='balanced'?'selected':''}>Balanceado</option>
           </select>` : ''}
-          <a class="btn btn-ghost btn-sm" href="/profile/${t.organizerUsername || t.organizerId}" onclick="profileLinkClick(event,'${t.organizerUsername || t.organizerId}')">Ver perfil</a>
+          <a class="btn btn-ghost btn-sm" href="${profileHref(t.organizerUsername || t.organizerId)}" onclick="profileLinkClick(event,'${jsAttr(t.organizerUsername || t.organizerId)}')">Ver perfil</a>
           <button class="btn btn-ghost btn-sm" onclick="refreshTournament()">↻</button>
         </div>
       </div>
@@ -1015,6 +1086,7 @@ function renderOrgTables(t, round) {
           ${tablesEditable && !finished ? '<span style="cursor:grab;color:var(--text-hint);margin-right:2px;font-size:1rem;line-height:1;">::</span>' : ''}
           <div class="player-avatar">${initials(p.displayName)}</div>
           <span style="flex:1;font-weight:600;font-size:0.92rem;">${escHtml(p.displayName)}</span>
+          ${anonymousBadge(p)}
           ${!isBench && !finished && (round.status === 'active' || round.status === 'pending') ? `
             <div class="score-control">
               <button class="score-btn" onclick="adjustScore('${t.id}','${round.id}','${table.id}','${p.userId}',-1)">−</button>
@@ -1229,6 +1301,7 @@ function renderPlayerControlPanel(t) {
       <div class="card-elevated ${p.eliminatedFromTournament ? 'player-row disqualified' : ''}" style="display:flex;align-items:center;gap:0.65rem;padding:0.55rem 0.7rem;flex-wrap:wrap;">
         <div class="player-avatar" style="width:24px;height:24px;font-size:0.55rem;">${initials(p.displayName)}</div>
         <span style="flex:1;font-weight:600;font-size:0.86rem;${p.eliminatedFromTournament?'text-decoration:line-through;':''}">${escHtml(p.displayName)}</span>
+        ${anonymousBadge(p)}
         <div class="score-control">
           <button class="score-btn" onclick="adjustGlobalScore('${t.id}','${p.userId}',-1)">−</button>
           <span id="gs-${p.userId}" style="font-family:'Cinzel',serif;font-weight:700;min-width:1.6rem;text-align:center;">${p.score||0}</span>
@@ -1247,6 +1320,10 @@ function renderPlayerControlPanel(t) {
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
       <input id="org-player-profile-link" class="input" style="flex:1;min-width:180px;" placeholder="Pegar link de perfil o username..." />
       <button class="btn btn-outline btn-sm" onclick="addPlayerFromOrganizerProfileLink('${t.id}')">Invitar por link</button>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <input id="org-anonymous-player-name" class="input" style="flex:1;min-width:180px;" placeholder="Nombre de jugador anonimo..." />
+      <button class="btn btn-outline btn-sm" onclick="addAnonymousPlayerFromOrganizer('${t.id}')">Agregar anonimo</button>
     </div>
     <div style="display:flex;flex-direction:column;gap:0.5rem;">${playerRows}</div>
   </div>`;
@@ -1295,6 +1372,18 @@ async function addPlayerFromOrganizer(tid, userId) {
     _updateTournamentCache(t);
     renderOrganizerView(t);
     toast(invited ? 'Invitacion enviada' : 'Jugador agregado', invited ? 'info' : 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function addAnonymousPlayerFromOrganizer(tid, name = null) {
+  const input = document.getElementById('org-anonymous-player-name');
+  const anonymousName = (name || input?.value || '').trim();
+  if (!anonymousName) { toast('Ingresa un nombre anonimo', 'error'); return; }
+  try {
+    const t = await api('/api/tournaments/' + tid + '/players', { method: 'POST', body: { anonymousName } });
+    _updateTournamentCache(t);
+    renderOrganizerView(t);
+    toast('Jugador anonimo agregado', 'success');
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -1535,11 +1624,11 @@ function renderSpectatorView(t) {
               </span>
               ${t.isRanked?'<span class="badge badge-gold">⭐ Rankeado</span>':''}
               <span class="badge badge-gray">Min. ${t.minimumPlayers || (t.isRanked ? 8 : 2)} jugadores</span>
-              <a href="/profile/${t.organizerUsername || t.organizerId}" onclick="profileLinkClick(event,'${t.organizerUsername || t.organizerId}')" style="font-size:0.82rem;color:var(--accent);cursor:pointer;">por ${escHtml(t.organizerName)}</a>
+              <a href="${profileHref(t.organizerUsername || t.organizerId)}" onclick="profileLinkClick(event,'${jsAttr(t.organizerUsername || t.organizerId)}')" style="font-size:0.82rem;color:var(--accent);cursor:pointer;">por ${escHtml(t.organizerName)}</a>
             </div>
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.5rem;">
-            <button class="btn btn-ghost btn-sm" onclick="copyLink('/tournament/${t.id}')" title="Copiar link del torneo">
+            <button class="btn btn-ghost btn-sm" onclick="copyLink('${jsAttr(tournamentHref(t.id))}')" title="Copiar link del torneo">
               🔗 Copiar link
             </button>
             <span style="font-family:'Cinzel',serif;font-size:1.2rem;font-weight:700;color:var(--accent);">${t.currentRound}/${t.totalRounds}</span>
@@ -1580,19 +1669,20 @@ function renderSpectatorView(t) {
             <span class="section-title">● Ronda ${activeRound.number} en Curso</span>
             <div style="display:flex;flex-direction:column;gap:1rem;">
               ${activeRound.tables.map(table => {
+                const isBench = table.type === 'bench' || table.id === 'bench';
                 const finished = table.status === 'finished';
-                const resultBadge = finished ? (
+                const resultBadge = !isBench && finished ? (
                   table.result === 'winner' ? `<span class="badge badge-gold">🏆 ${escHtml(table.winner?.displayName||'?')}</span>` :
                   table.result === 'draw'   ? '<span class="badge badge-orange">⚖ Empate</span>' :
                   '<span class="badge badge-gray">Sin ganador</span>'
                 ) : '';
                 return `
-                <div class="table-pod ${finished?'pod-finished':''}">
+                <div class="table-pod ${finished?'pod-finished':''} ${isBench ? 'bench-pod' : ''}">
                   <div class="table-pod-header">
-                    <h3>Mesa ${table.id.replace('t','')}</h3>
+                    <h3>${isBench ? 'Banca' : 'Mesa ' + table.id.replace('t','')}</h3>
                     <div style="display:flex;align-items:center;gap:0.5rem;">
                       ${resultBadge}
-                      ${!finished && table.startTime ? `<span id="spec-sw-${table.id}" class="stopwatch-display"></span>` : ''}
+                      ${!isBench && !finished && table.startTime ? `<span id="spec-sw-${table.id}" class="stopwatch-display"></span>` : ''}
                       <span style="font-size:0.78rem;color:var(--text-muted);">${table.players.filter(p=>!p.eliminated).length} activos</span>
                     </div>
                   </div>
@@ -1600,6 +1690,7 @@ function renderSpectatorView(t) {
                     <div class="player-row ${p.eliminated?'eliminated':''}">
                       <div class="player-avatar">${initials(p.displayName)}</div>
                       <span style="flex:1;font-weight:600;">${escHtml(p.displayName)}</span>
+                      ${anonymousBadge(p)}
                       ${p.eliminated?'<span class="badge badge-red" style="font-size:0.7rem;">Elim.</span>':''}
                       <span style="font-family:\'Cinzel\',serif;font-size:1.05rem;font-weight:700;color:var(--accent);">${p.score||0}</span>
                     </div>`).join('')}
@@ -1781,6 +1872,7 @@ function renderStandings(players, tid, editable, rounds) {
             <div style="display:flex;align-items:center;gap:0.4rem;">
               <div class="player-avatar" style="width:20px;height:20px;font-size:0.5rem;flex-shrink:0;">${initials(p.displayName)}</div>
               <span style="font-size:0.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(p.displayName)}</span>
+              ${anonymousBadge(p)}
             </div>
           </td>
           <td style="text-align:right;">
@@ -1833,7 +1925,7 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
         </div>
       </div>
       ${canInviteFromProfile ? `<button class="btn btn-primary btn-sm" onclick="inviteProfileUser('${user.id}')">Invitar a torneo</button>` : ''}
-      <button class="btn btn-ghost btn-sm" onclick="copyLink('/profile/${profileSlug(user)}')" title="Copiar link del perfil">
+      <button class="btn btn-ghost btn-sm" onclick="copyLink('${jsAttr(profileHref(user))}')" title="Copiar link del perfil">
         🔗 Copiar link
       </button>
     </div>
@@ -1863,6 +1955,7 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
             <div style="display:flex;align-items:center;gap:0.75rem;padding:0.55rem 0.8rem;border-bottom:1px solid var(--border);">
               <span style="font-family:'Cinzel',serif;color:var(--text-hint);width:1.6rem;">${i+1}</span>
               <span style="flex:1;font-weight:600;">${escHtml(r.displayName)}</span>
+              ${anonymousBadge(r)}
               <span class="badge badge-gold">${r.points} pts</span>
               <span style="font-size:0.78rem;color:var(--text-muted);">${r.tournamentsPlayed} torneos</span>
             </div>`).join('') : '<div style="padding:0.8rem;color:var(--text-hint);font-size:0.9rem;">Sin ranking acumulado todavia.</div>'}
@@ -1902,8 +1995,8 @@ function profileTRow(t, canManage) {
   const sl = { lobby:'Lobby', active:'En curso', review:'Revision', finished:'Finalizado' };
   const tid = t._id || t.id;
   return `
-    <a class="card-elevated" href="/tournament/${tid}" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;cursor:pointer;text-decoration:none;color:inherit;"
-         onclick="tournamentLinkClick(event,'${tid}')"
+    <a class="card-elevated" href="${tournamentHref(tid)}" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;cursor:pointer;text-decoration:none;color:inherit;"
+         onclick="tournamentLinkClick(event,'${jsAttr(tid)}')"
          onmouseenter="this.style.borderColor='var(--border-glow)'" onmouseleave="this.style.borderColor='var(--border)'">
       <div style="flex:1;">
         <div style="font-weight:600;font-size:0.92rem;">${escHtml(t.name)}</div>
@@ -2087,7 +2180,7 @@ function handleHeaderSearch(q) {
     let userResults = [];
     try { userResults = await api('/api/users/search?q=' + encodeURIComponent(q)); } catch {}
     dd.innerHTML = results.length
-      ? results.map(t => `<a class="search-dropdown-item" href="/tournament/${t.id}" onclick="hideHeaderSearch();tournamentLinkClick(event,'${t.id}')" style="text-decoration:none;color:inherit;">
+      ? results.map(t => `<a class="search-dropdown-item" href="${tournamentHref(t.id)}" onclick="hideHeaderSearch();tournamentLinkClick(event,'${jsAttr(t.id)}')" style="text-decoration:none;color:inherit;">
           <div style="flex:1;">
             <div style="font-weight:600;font-size:0.88rem;">${escHtml(t.name)}</div>
             <div style="font-size:0.75rem;color:var(--text-muted);">${t.players.length} jug. · Ronda ${t.currentRound}/${t.totalRounds}</div>
@@ -2097,7 +2190,7 @@ function handleHeaderSearch(q) {
       : '<div class="search-dropdown-empty">Sin resultados</div>';
     if (results.length || userResults.length) {
       const tournamentHtml = results.length ? '<div class="search-dropdown-empty" style="text-align:left;padding:0.45rem 0.75rem;">Torneos</div>' + dd.innerHTML : '';
-      const usersHtml = userResults.slice(0,4).map(u => `<a class="search-dropdown-item" href="/profile/${profileSlug(u)}" onclick="hideHeaderSearch();profileLinkClick(event,'${profileSlug(u)}')" style="text-decoration:none;color:inherit;">
+      const usersHtml = userResults.slice(0,4).map(u => `<a class="search-dropdown-item" href="${profileHref(u)}" onclick="hideHeaderSearch();profileLinkClick(event,'${jsAttr(profileSlug(u))}')" style="text-decoration:none;color:inherit;">
           <div class="player-avatar" style="width:28px;height:28px;font-size:0.6rem;">${initials(u.displayName)}</div>
           <div style="flex:1;">
             <div style="font-weight:600;font-size:0.88rem;">${escHtml(u.displayName)}</div>

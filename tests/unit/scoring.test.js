@@ -53,3 +53,28 @@ test('accumulateRoundScores applies points and record stats', () => {
   assert.equal(tournament.players[1].score, 2);
   assert.equal(tournament.players[1].losses, 1);
 });
+
+test('accumulateRoundScores preserves manual score already present on players', () => {
+  const tournament = {
+    players: [
+      { userId: 'u1', score: 2, wins: 0, losses: 0, draws: 0 },
+      { userId: 'u2', score: -1, wins: 0, losses: 0, draws: 0 },
+    ],
+  };
+  const round = {
+    tables: [{
+      result: 'draw',
+      drawPlayers: [{ userId: 'u1' }, { userId: 'u2' }],
+      players: [
+        { userId: 'u1', score: 3, eliminated: false },
+        { userId: 'u2', score: 3, eliminated: false },
+      ],
+    }],
+  };
+
+  accumulateRoundScores(tournament, round);
+  assert.equal(tournament.players[0].score, 5);
+  assert.equal(tournament.players[1].score, 2);
+  assert.equal(tournament.players[0].draws, 1);
+  assert.equal(tournament.players[1].draws, 1);
+});

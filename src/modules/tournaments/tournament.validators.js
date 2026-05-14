@@ -59,9 +59,15 @@ function validateCreateTournament(req) {
 }
 
 function validateAddPlayer(req) {
+  const userId = typeof req.body.userId === 'string' ? req.body.userId.trim() : '';
+  const anonymousName = typeof req.body.anonymousName === 'string' ? req.body.anonymousName.trim().replace(/\s+/g, ' ') : '';
+  if (userId && anonymousName) throw ApiError.badRequest('Elige un jugador registrado o anonimo, no ambos');
+  if (!userId && !anonymousName) throw ApiError.badRequest('Jugador requerido');
+  if (anonymousName && anonymousName.length > 80) throw ApiError.badRequest('Nombre anonimo demasiado largo');
   return {
     body: {
-      userId: typeof req.body.userId === 'string' ? req.body.userId.trim() : null,
+      userId: userId || null,
+      anonymousName: anonymousName || null,
     },
   };
 }

@@ -118,7 +118,12 @@
           <input id="player-profile-link" class="input" style="flex:1;min-width:240px;" placeholder="Pegar link de perfil o username..." />
           <button type="button" class="btn btn-outline btn-sm" onclick="addPlayerToLobbyByProfileLink()">Agregar por link</button>
         </div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap;">
+          <input id="anonymous-player-name" class="input" style="flex:1;min-width:240px;" placeholder="Nombre de jugador anonimo..." />
+          <button type="button" class="btn btn-outline btn-sm" onclick="addAnonymousPlayerToLobby()">Agregar anonimo</button>
+        </div>
       </div>
+      <div id="lobby-player-suggestions" style="margin-bottom:1.5rem;"></div>
       <!-- Solicitudes pendientes -->
       <div id="lobby-requests" style="margin-bottom:1rem;"></div>
       <!-- Lista jugadores -->
