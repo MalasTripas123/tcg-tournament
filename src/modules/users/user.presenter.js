@@ -8,6 +8,7 @@ function presentUser(user) {
     role: user.role,
     isLicensed: user.isLicensed,
     invitationPolicy: user.invitationPolicy || 'manual',
+    showPlayedTournaments: user.showPlayedTournaments !== false,
     rankings: user.rankings || [],
   };
 }

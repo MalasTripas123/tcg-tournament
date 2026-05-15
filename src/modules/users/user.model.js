@@ -41,6 +41,10 @@ const userSchema = new mongoose.Schema({
     enum: ['manual', 'auto'],
     default: 'manual',
   },
+  showPlayedTournaments: {
+    type: Boolean,
+    default: true,
+  },
   rankings: [{
     organizerId: { type: String, required: true },
     organizerName: { type: String, default: '' },

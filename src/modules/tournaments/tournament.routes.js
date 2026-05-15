@@ -12,9 +12,13 @@ router.post('/', requireAuth, validateRequest(validators.validateCreateTournamen
 router.get('/:id/player-suggestions', requireAuth, asyncHandler(controller.playerSuggestions));
 router.get('/:id', asyncHandler(controller.detail));
 
+router.post('/:id/moderators', requireAuth, validateRequest(validators.validateModerator), asyncHandler(controller.addModerator));
+router.delete('/:id/moderators/:userId', requireAuth, asyncHandler(controller.removeModerator));
+
 router.post('/:id/players', requireAuth, validateRequest(validators.validateAddPlayer), asyncHandler(controller.addPlayer));
 router.delete('/:id/players/:userId', requireAuth, asyncHandler(controller.removePlayer));
 router.patch('/:id/players/:userId/score', requireAuth, validateRequest(validators.validatePatchScore), asyncHandler(controller.setPlayerScore));
+router.post('/:id/players/:userId/appeal', requireAuth, validateRequest(validators.validateAppeal), asyncHandler(controller.appealPlayerDiscipline));
 
 router.patch('/:id/join-requests/:userId', requireAuth, validateRequest(validators.validateJoinRequestAction), asyncHandler(controller.handleJoinRequest));
 router.patch('/:id/invitations/me', requireAuth, validateRequest(validators.validateInvitationAction), asyncHandler(controller.handleInvitation));
@@ -25,7 +29,9 @@ router.patch('/:id/settings', requireAuth, validateRequest(validators.validateTo
 router.put('/:id/rounds/:roundId/tables', requireAuth, validateRequest(validators.validateReplaceTables), asyncHandler(controller.replaceTables));
 router.post('/:id/rounds/:roundId/tables', requireAuth, asyncHandler(controller.addTable));
 router.post('/:id/rounds/:roundId/tables/shuffle', requireAuth, asyncHandler(controller.shuffleTables));
+router.patch('/:id/rounds/:roundId/scores', requireAuth, validateRequest(validators.validateScoreDelta), asyncHandler(controller.adjustRoundScores));
 router.delete('/:id/rounds/:roundId/tables/:tableId', requireAuth, asyncHandler(controller.deleteTable));
+router.patch('/:id/rounds/:roundId/tables/:tableId/scores', requireAuth, validateRequest(validators.validateScoreDelta), asyncHandler(controller.adjustTableScores));
 router.patch('/:id/rounds/:roundId/tables/:tableId/players/:userId', requireAuth, validateRequest(validators.validateUpdateTablePlayer), asyncHandler(controller.updateTablePlayer));
 router.post('/:id/rounds/:roundId/tables/:tableId/finish', requireAuth, validateRequest(validators.validateFinishTable), asyncHandler(controller.finishTable));
 router.post('/:id/rounds/:roundId/tables/:tableId/revise', requireAuth, validateRequest(validators.validateFinishTable), asyncHandler(controller.reviseTable));

@@ -6,7 +6,7 @@ function tournamentId(tournament) {
 
 function presentJoinRequests(tournament, viewer) {
   const viewerId = viewer?.id;
-  if (policies.isOrganizer(tournament, viewerId)) return tournament.joinRequests || [];
+  if (policies.canManageTournament(tournament, viewerId)) return tournament.joinRequests || [];
   if (!viewerId) return [];
   return (tournament.joinRequests || []).filter(request => request.userId === viewerId);
 }
@@ -19,6 +19,7 @@ function presentTournament(tournament, viewer = null) {
     organizerId: tournament.organizerId,
     organizerName: tournament.organizerName,
     organizerUsername: tournament.organizerUsername || '',
+    scheduledStartAt: tournament.scheduledStartAt || null,
     totalRounds: tournament.totalRounds,
     roundDuration: tournament.roundDuration,
     status: tournament.status,
@@ -27,9 +28,13 @@ function presentTournament(tournament, viewer = null) {
     isOfficial: !!tournament.isRanked,
     minimumPlayers: tournament.isRanked ? 8 : 2,
     pairingMethod: tournament.pairingMethod || 'snake',
+    tableMode: tournament.tableMode || 'multi',
     rankingApplied: !!tournament.rankingApplied,
     rankingDeltas: tournament.rankingDeltas || [],
     prizes: tournament.prizes || [],
+    moderators: tournament.moderators || [],
+    isModerator: policies.isModerator(tournament, viewerId),
+    canManage: policies.canManageTournament(tournament, viewerId),
     players: tournament.players || [],
     joinRequests: presentJoinRequests(tournament, viewer),
     rounds: tournament.rounds || [],

@@ -56,6 +56,14 @@ async function updateInvitationPolicy(uid, invitationPolicy) {
   ).lean();
 }
 
+async function updateProfileVisibility(uid, showPlayedTournaments) {
+  return User.findOneAndUpdate(
+    { uid },
+    { $set: { showPlayedTournaments: !!showPlayedTournaments } },
+    { new: true, runValidators: true }
+  ).lean();
+}
+
 function normalizeRankingEntry(entry) {
   const points = Number(entry.points);
   const tournamentsPlayed = Number(entry.tournamentsPlayed);
@@ -155,6 +163,7 @@ module.exports = {
   searchUsers,
   createUser,
   updateInvitationPolicy,
+  updateProfileVisibility,
   replaceOrganizerRanking,
   findRankingByOrganizer,
 };

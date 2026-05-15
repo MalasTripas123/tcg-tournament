@@ -17,14 +17,19 @@ async function profile(req, res) {
     user: presentUser(profileData.user),
     organizedActive: profileData.organizedActive,
     organizedFinished: profileData.organizedFinished,
+    moderatingActive: profileData.moderatingActive || [],
+    moderatedFinished: profileData.moderatedFinished || [],
+    viewerOrganizedParticipations: profileData.viewerOrganizedParticipations || [],
     playingIn: profileData.playingIn,
+    playedTournamentsVisible: profileData.playedTournamentsVisible,
+    profileStats: profileData.profileStats,
     invitedTo: profileData.invitedTo || [],
     officialRanking: profileData.officialRanking || [],
   });
 }
 
 async function updatePreferences(req, res) {
-  const user = await userService.updateInvitationPolicy(req.session.userId, req.validated.body.invitationPolicy);
+  const user = await userService.updatePreferences(req.session.userId, req.validated.body);
   return ok(res, { user: presentUser(user) });
 }
 

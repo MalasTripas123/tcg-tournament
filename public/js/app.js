@@ -76,7 +76,7 @@ async function resolveRoute(pathname) {
     try {
       const t = await api('/api/tournaments/' + id);
       _updateTournamentCache(t);
-      const isOrg = App.currentUser && t.organizerId === App.currentUser.id;
+      const isOrg = isTournamentManager(t);
       if (t.status === 'lobby' && isOrg) {
         renderLobby(t); _showView('lobby');
       } else if (isOrg) {
@@ -199,6 +199,80 @@ function tournamentHref(id) {
 
 function anonymousBadge(item) {
   return item?.isAnonymous ? '<span class="badge badge-gray">Anonimo</span>' : '';
+}
+
+function tableModeLabel(mode) {
+  return mode === 'versus' ? 'Versus' : 'Multi';
+}
+
+function isTournamentManager(t) {
+  return !!(App.currentUser && (t.canManage || t.isOrganizer || t.isModerator || t.organizerId === App.currentUser.id));
+}
+
+function viewerTournamentRoleBadge(t) {
+  if (!App.currentUser) return '';
+  if (t.isOrganizer || t.organizerId === App.currentUser.id) return '<span class="badge badge-gold">Organizador</span>';
+  if (t.isModerator) return '<span class="badge badge-purple">Moderador</span>';
+  return '';
+}
+
+function formatDateTime(timestamp) {
+  if (!timestamp) return 'Sin fecha programada';
+  return new Date(timestamp).toLocaleString('es-CL', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+}
+
+function readDateTimeLocal(id) {
+  const value = document.getElementById(id)?.value;
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function toggleStartDateInput(enabled) {
+  const input = document.getElementById('t-start');
+  if (!input) return;
+  input.disabled = !enabled;
+  if (!enabled) input.value = '';
+}
+
+function renderPrize(p) {
+  if (p.type === 'credit') {
+    const totalValue = (p.creditCount || 0) * (p.creditValue || 0);
+    const parts = (p.distribution || []).map(d => `#${d.place}: ${d.credits} (${d.percentage}%)`).join(' - ');
+    return `<div class="prize-card credit-prize">
+      <span class="badge badge-gold">${p.creditCount || 0} creditos</span>
+      <div style="display:flex;flex-direction:column;gap:0.15rem;">
+        <span style="font-size:0.88rem;">${formatMoney(totalValue)} en creditos de tienda</span>
+        <span style="font-size:0.75rem;color:var(--text-muted);">${escHtml(parts)}</span>
+      </div>
+    </div>`;
+  }
+  return `<div class="prize-card">
+    ${p.imageUrl ? `<img src="${escHtml(p.imageUrl)}" style="width:28px;height:38px;object-fit:cover;border-radius:3px;" onerror="this.style.display='none'" />` : ''}
+    <span>${p.type === 'card' && !p.imageUrl ? 'Carta: ' : ''}${escHtml(p.value)}</span>
+  </div>`;
+}
+
+function formatMoney(value) {
+  const amount = Math.max(0, Number(value) || 0);
+  return amount.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
+}
+
+function disciplineBadges(p) {
+  const cards = [];
+  if (p.redCard) cards.push('<span class="badge badge-red">Roja</span>');
+  else if (p.yellowCards) cards.push(`<span class="badge badge-orange">${p.yellowCards} amarilla${p.yellowCards === 1 ? '' : 's'}</span>`);
+  if (p.eliminatedFromTournament) cards.push('<span class="badge badge-red">DQ</span>');
+  return cards.join('');
+}
+
+function cardBoxes(p) {
+  if (p.redCard) return '<span class="card-box red"></span><span class="card-box red"></span>';
+  const count = Math.max(0, Math.min(2, p.yellowCards || 0));
+  return `<span class="card-box ${count >= 1 ? 'yellow' : ''}"></span><span class="card-box ${count >= 2 ? 'yellow' : ''}"></span>`;
 }
 
 function jsAttr(value) {
@@ -383,7 +457,7 @@ function renderTournamentsList(list) {
   const visMap = { public:'🌐', approval:'⏳', private:'🔒' };
   c.innerHTML = list.map(t => {
     const s = statusMap[t.status] || statusMap.lobby;
-    const isOrg = App.currentUser && t.organizerId === App.currentUser.id;
+    const isOrg = isTournamentManager(t);
     return `<a class="card tournament-card" href="${tournamentHref(t.id)}" onclick="tournamentLinkClick(event,'${jsAttr(t.id)}')" style="cursor:pointer;transition:border-color 0.2s,transform 0.15s;display:block;text-decoration:none;color:inherit;"
          onmouseenter="this.style.borderColor='var(--border-glow)';this.style.transform='translateY(-2px)'"
          onmouseleave="this.style.borderColor='var(--border)';this.style.transform=''">
@@ -410,7 +484,7 @@ async function openTournament(id) {
   try {
     const t = await api('/api/tournaments/' + id);
     _updateTournamentCache(t);
-    const isOrg = App.currentUser && t.organizerId === App.currentUser.id;
+    const isOrg = isTournamentManager(t);
     if (t.status === 'lobby' && isOrg) { renderLobby(t); navigate('lobby', id); }
     else if (isOrg) { renderOrganizerView(t); navigate('organizer', id); }
     else { renderSpectatorView(t); navigate('spectator', id); }
@@ -429,12 +503,16 @@ function handleCreateTournament() {
 
 function addPrize(type) {
   const pid = 'prize-' + Date.now();
-  App.prizes.push({ id: pid, type, value: '', imageUrl: '' });
+  App.prizes.push(type === 'credit'
+    ? { id: pid, type, value: 'Creditos de tienda', imageUrl: '', creditCount: 10, creditValue: 10000, distribution: [{ credits: 6 }, { credits: 3 }, { credits: 1 }] }
+    : { id: pid, type, value: '', imageUrl: '' });
   const c = document.getElementById('prizes-list');
   const el = document.createElement('div');
   el.className = 'card-elevated'; el.id = pid;
   el.style.cssText = 'display:flex;flex-direction:column;gap:0.75rem;';
-  el.innerHTML = type === 'text'
+  el.innerHTML = type === 'credit'
+    ? renderCreditPrizeEditor(pid)
+    : type === 'text'
     ? `<div style="display:flex;align-items:center;justify-content:space-between;">
         <span style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;">Premio</span>
         <button type="button" class="btn btn-danger btn-icon btn-sm" onclick="removePrize('${pid}')">✕</button>
@@ -452,6 +530,162 @@ function addPrize(type) {
 function removePrize(id) { App.prizes = App.prizes.filter(p => p.id !== id); document.getElementById(id)?.remove(); }
 function updatePrize(id, key, val) { const p = App.prizes.find(p => p.id === id); if (p) p[key] = val; }
 
+function renderCreditPrizeEditor(id) {
+  const p = App.prizes.find(prize => prize.id === id);
+  if (!p) return '';
+  normalizeCreditDistribution(p);
+  const totalCredits = Math.max(1, parseInt(p.creditCount, 10) || 1);
+  const totalValue = totalCredits * (parseInt(p.creditValue, 10) || 0);
+  const validation = creditPrizeValidation(p);
+  return `<div style="display:flex;align-items:center;justify-content:space-between;">
+      <span style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;">Creditos de tienda</span>
+      <button type="button" class="btn btn-danger btn-icon btn-sm" onclick="removePrize('${id}')">x</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;" class="two-col">
+      <label style="display:flex;flex-direction:column;gap:0.35rem;font-size:0.78rem;color:var(--text-muted);">
+        Creditos
+        <input class="input ${totalCredits < 1 ? 'input-invalid' : ''}" type="number" min="1" max="999" step="1" value="${totalCredits}" onchange="updateCreditPrize('${id}','creditCount',this.value)" />
+      </label>
+      <label style="display:flex;flex-direction:column;gap:0.35rem;font-size:0.78rem;color:var(--text-muted);">
+        Valor por credito
+        <input class="input" type="number" min="0" step="1" value="${p.creditValue || 0}" onchange="updateCreditPrize('${id}','creditValue',this.value)" />
+      </label>
+    </div>
+    <div style="font-size:0.82rem;color:var(--text-muted);">Total estimado: ${formatMoney(totalValue)}</div>
+    <div class="${validation.valid ? 'credit-summary valid' : 'credit-summary invalid'}">
+      Repartidos: ${validation.used}/${validation.expected} creditos ${validation.remaining ? `- faltan ${validation.remaining}` : ''}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:0.5rem;">
+      ${renderCreditDistributionRows(p, totalCredits)}
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="addCreditPlace('${id}')">+ Puesto</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="removeCreditPlace('${id}')">- Puesto</button>
+      <button type="button" class="btn btn-outline btn-sm" onclick="rebalanceCreditPrize('${id}');renderCreditPrize('${id}')">Balancear</button>
+    </div>
+    <div class="time-note">Cada puesto entrega creditos enteros. Si cambias un valor, el sistema ajusta los otros puestos para mantener la suma correcta.</div>`;
+}
+
+function renderCreditDistributionRows(p, totalCredits) {
+  return (p.distribution || []).map((entry, index) => {
+    const credits = Math.max(0, parseInt(entry.credits, 10) || 0);
+    const pct = totalCredits ? Math.round((credits / totalCredits) * 10000) / 100 : 0;
+    return `<label style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+      <span style="min-width:4.5rem;color:var(--text-muted);font-size:0.85rem;">#${index + 1}</span>
+      <input class="input credit-place-input ${creditPrizeValidation(p).valid ? '' : 'input-invalid'}" style="width:92px;" type="number" min="0" max="${totalCredits}" step="1" value="${credits}" onchange="updateCreditPlace('${p.id}',${index},this.value)" />
+      <span class="badge badge-gray">${pct}%</span>
+    </label>`;
+  }).join('');
+}
+
+function updateCreditPrize(id, key, value) {
+  const p = App.prizes.find(prize => prize.id === id);
+  if (!p) return;
+  p[key] = Math.max(key === 'creditCount' ? 1 : 0, parseInt(value, 10) || 0);
+  if (key === 'creditCount') {
+    p.distribution = (p.distribution || []).slice(0, Math.max(1, p.creditCount || 1));
+    normalizeCreditDistribution(p);
+  }
+  renderCreditPrize(id);
+}
+
+function renderCreditPrize(id) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = renderCreditPrizeEditor(id);
+}
+
+function addCreditPlace(id) {
+  const p = App.prizes.find(prize => prize.id === id);
+  if (!p) return;
+  const maxPlaces = Math.max(1, p.creditCount || 1);
+  if ((p.distribution || []).length >= maxPlaces) return toast('No puede haber mas puestos que creditos', 'error');
+  p.distribution.push({ credits: 0 });
+  rebalanceCreditPrize(id);
+  renderCreditPrize(id);
+}
+
+function removeCreditPlace(id) {
+  const p = App.prizes.find(prize => prize.id === id);
+  if (!p || (p.distribution || []).length <= 1) return;
+  p.distribution.pop();
+  rebalanceCreditPrize(id);
+  renderCreditPrize(id);
+}
+
+function updateCreditPlace(id, index, value) {
+  const p = App.prizes.find(prize => prize.id === id);
+  if (!p) return;
+  const expected = Math.max(1, parseInt(p.creditCount, 10) || 1);
+  p.distribution[index].credits = Math.max(0, Math.min(expected, parseInt(value, 10) || 0));
+  normalizeCreditDistribution(p, index);
+  renderCreditPrize(id);
+}
+
+function rebalanceCreditPrize(id) {
+  const p = App.prizes.find(prize => prize.id === id);
+  if (!p) return;
+  const totalCredits = Math.max(1, p.creditCount || 1);
+  const places = Math.max(1, Math.min(totalCredits, (p.distribution || []).length || 1));
+  const base = Math.floor(totalCredits / places);
+  let remaining = totalCredits % places;
+  p.distribution = Array.from({ length: places }, () => ({ credits: base + (remaining-- > 0 ? 1 : 0) }));
+}
+
+function normalizeCreditDistribution(p, lockedIndex = -1) {
+  const expected = Math.max(1, parseInt(p.creditCount, 10) || 1);
+  const places = Math.max(1, Math.min(expected, (p.distribution || []).length || 1));
+  p.creditCount = expected;
+  p.distribution = (p.distribution || []).slice(0, places).map(entry => ({
+    credits: Math.max(0, Math.min(expected, parseInt(entry.credits, 10) || 0)),
+  }));
+  while (p.distribution.length < places) p.distribution.push({ credits: 0 });
+
+  let used = p.distribution.reduce((sum, entry) => sum + entry.credits, 0);
+  if (used > expected) {
+    let overflow = used - expected;
+    for (let i = p.distribution.length - 1; i >= 0 && overflow > 0; i--) {
+      if (i === lockedIndex) continue;
+      const take = Math.min(p.distribution[i].credits, overflow);
+      p.distribution[i].credits -= take;
+      overflow -= take;
+    }
+    if (overflow > 0 && lockedIndex >= 0) p.distribution[lockedIndex].credits = Math.max(0, p.distribution[lockedIndex].credits - overflow);
+  }
+
+  used = p.distribution.reduce((sum, entry) => sum + entry.credits, 0);
+  if (used < expected) {
+    const receiver = p.distribution.length > 1
+      ? p.distribution.findIndex((_, index) => index !== lockedIndex)
+      : 0;
+    p.distribution[receiver === -1 ? 0 : receiver].credits += expected - used;
+  }
+}
+
+function creditPrizeValidation(p) {
+  const expected = Math.max(1, parseInt(p.creditCount, 10) || 1);
+  const used = (p.distribution || []).reduce((sum, entry) => sum + (parseInt(entry.credits, 10) || 0), 0);
+  return {
+    expected,
+    used,
+    remaining: Math.max(0, expected - used),
+    valid: expected > 0 && used === expected && (p.distribution || []).every(entry => Number.isInteger(parseInt(entry.credits, 10))),
+  };
+}
+
+function validatePrizesBeforeSubmit() {
+  for (const prize of App.prizes) {
+    if (prize.type !== 'credit') continue;
+    normalizeCreditDistribution(prize);
+    const validation = creditPrizeValidation(prize);
+    if (!validation.valid) {
+      renderCreditPrize(prize.id);
+      toast('Revisa la reparticion de creditos antes de crear el torneo', 'error');
+      return false;
+    }
+  }
+  return true;
+}
+
 async function submitCreateTournament(e) {
   e.preventDefault();
   const name       = document.getElementById('t-name').value.trim();
@@ -459,10 +693,20 @@ async function submitCreateTournament(e) {
   const roundDuration = parseInt(document.getElementById('t-duration').value);
   const visibility = document.getElementById('t-visibility').value;
   const pairingMethod = document.getElementById('t-pairing').value;
+  const tableMode = document.getElementById('t-table-mode').value;
+  const scheduledStartAt = document.getElementById('t-has-start')?.checked ? readDateTimeLocal('t-start') : null;
   if (!name) { toast('Ingresa el nombre del torneo', 'error'); return; }
-  const prizes = App.prizes.map(({ type, value, imageUrl }) => ({ type, value, imageUrl }));
+  if (!validatePrizesBeforeSubmit()) return;
+  const prizes = App.prizes.map(({ type, value, imageUrl, creditCount, creditValue, distribution }) => ({
+    type,
+    value,
+    imageUrl,
+    creditCount,
+    creditValue,
+    distribution,
+  }));
   try {
-    const t = await api('/api/tournaments', { method: 'POST', body: { name, totalRounds, roundDuration, prizes, visibility, pairingMethod } });
+    const t = await api('/api/tournaments', { method: 'POST', body: { name, scheduledStartAt, totalRounds, roundDuration, prizes, visibility, pairingMethod, tableMode } });
     App.tournaments.unshift(t);
     toast('Torneo "' + t.name + '" creado', 'success');
     renderLobby(t); navigate('lobby', t.id);
@@ -485,14 +729,17 @@ function renderLobby(t) {
             <span>${visLabel[t.visibility] || '🌐 Público'}</span>
             <span>Min. ${t.minimumPlayers || (t.isRanked ? 8 : 2)} jugadores</span>
             <span>${pairingLabel[t.pairingMethod] || 'Snake'}</span>
+            <span>${tableModeLabel(t.tableMode)}</span>
+            <span>${formatDateTime(t.scheduledStartAt)}</span>
             ${t.isRanked ? '<span class="badge badge-gold">Oficial</span>' : '<span class="badge badge-gray">Normal</span>'}
+            ${viewerTournamentRoleBadge(t)}
           </div>
         </div>
         <span class="badge badge-gray">Lobby</span>
       </div>
       ${t.prizes.length ? `<div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);">
         <span class="section-title">Premios</span>
-        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">${t.prizes.map(p => `<div class="prize-card">
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">${t.prizes.map(renderPrize).join('')}</div><div style="display:none;">${t.prizes.map(p => `<div class="prize-card">
           ${p.imageUrl ? `<img src="${escHtml(p.imageUrl)}" style="width:28px;height:38px;object-fit:cover;border-radius:3px;" onerror="this.style.display='none'" />` : '🃏'}
           <span style="font-size:0.88rem;">${escHtml(p.value)}</span>
         </div>`).join('')}</div>
@@ -500,7 +747,19 @@ function renderLobby(t) {
     </div>`;
   renderLobbyRequests(t);
   renderLobbyPlayers(t);
+  renderLobbyModerators(t);
   renderLobbyPlayerSuggestions(t);
+}
+
+function renderLobbyModerators(t) {
+  const el = document.getElementById('lobby-moderators');
+  if (!el) return;
+  if (!t.isOrganizer) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="card">
+      <span class="section-title">Moderadores</span>
+      ${renderModeratorPanel(t)}
+    </div>`;
 }
 
 function renderLobbyRequests(t) {
@@ -669,6 +928,15 @@ async function updatePairingMethod(tid, pairingMethod) {
     _updateTournamentCache(t);
     if (App.currentTournamentId === tid) renderOrganizerView(t);
     toast('Metodo actualizado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function updateTableMode(tid, tableMode) {
+  try {
+    const t = await api('/api/tournaments/' + tid + '/settings', { method: 'PATCH', body: { tableMode } });
+    _updateTournamentCache(t);
+    if (App.currentTournamentId === tid) renderOrganizerView(t);
+    toast('Tipo de mesas actualizado', 'success');
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -856,12 +1124,14 @@ function renderFinalResults(t, editable = false) {
               <span>${t.players.length} jugadores</span>
               <span>${finishedRounds.length}/${t.totalRounds} rondas</span>
               <span>${t.isRanked ? 'Torneo oficial' : 'Torneo normal'}</span>
+              ${viewerTournamentRoleBadge(t)}
             </div>
           </div>
           <button class="btn btn-ghost btn-sm" onclick="copyLink('${jsAttr(tournamentHref(t.id))}')">Copiar link</button>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:1.5rem;align-items:start;" class="two-col">
+        ${renderAppealNotice(t)}
         <div class="card">
           <span class="section-title">Tabla final</span>
           ${renderStandings(t.players, t.id, false, t.rounds)}
@@ -878,12 +1148,7 @@ function renderFinalResults(t, editable = false) {
           </div>` : ''}
           ${t.prizes.length ? `<div class="card">
             <span class="section-title">Premios</span>
-            <div style="display:flex;flex-direction:column;gap:0.5rem;">
-              ${t.prizes.map(p => `<div class="prize-card">
-                ${p.imageUrl ? `<img src="${escHtml(p.imageUrl)}" style="width:28px;height:38px;object-fit:cover;border-radius:3px;" onerror="this.style.display='none'" />` : ''}
-                <span>${escHtml(p.value)}</span>
-              </div>`).join('')}
-            </div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem;">${t.prizes.map(renderPrize).join('')}</div>
           </div>` : ''}
         </div>
       </div>
@@ -897,6 +1162,29 @@ function renderFinalResults(t, editable = false) {
 // ═══════════════════════════════════════════════════════════════
 // VISTA ORGANIZADOR
 // ═══════════════════════════════════════════════════════════════
+function renderAppealNotice(t) {
+  if (!App.currentUser) return '';
+  const player = (t.players || []).find(p => p.userId === App.currentUser.id);
+  if (!player || (!player.eliminatedFromTournament && !(player.yellowCards || player.redCard))) return '';
+  return `<div class="card card-accent-left" style="grid-column:1/-1;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;">
+      <div>
+        <span class="section-title" style="margin:0 0 0.35rem;padding:0;border:none;">Apelacion disponible</span>
+        <div style="font-size:0.9rem;color:var(--text-muted);">Puedes pedir revision de tarjetas o descalificacion aplicada en este torneo.</div>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="appealDiscipline('${t.id}')">Apelar al soporte</button>
+    </div>
+  </div>`;
+}
+
+async function appealDiscipline(tid) {
+  const reason = prompt('Describe brevemente por que quieres apelar:') || '';
+  try {
+    await api('/api/tournaments/' + tid + '/players/' + App.currentUser.id + '/appeal', { method: 'POST', body: { reason } });
+    toast('Apelacion enviada a soporte', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 function renderOrganizerView(t) {
   stopAllTimers();
   if (t.status === 'finished') {
@@ -924,6 +1212,9 @@ function renderOrganizerView(t) {
           <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
             <span class="badge ${meta.badge}">${meta.label}</span>
             <span class="badge badge-purple">${phase.label}</span>
+            <span class="badge badge-gray">${tableModeLabel(t.tableMode)}</span>
+            ${viewerTournamentRoleBadge(t)}
+            <span style="font-size:0.85rem;color:var(--text-muted);">${formatDateTime(t.scheduledStartAt)}</span>
             ${t.isRanked ? '<span class="badge badge-gold">⭐ Rankeado</span>' : ''}
             <span style="font-size:0.85rem;color:var(--text-muted);">Ronda ${t.currentRound} / ${t.totalRounds}</span>
           </div>
@@ -954,6 +1245,10 @@ function renderOrganizerView(t) {
             <option value="snake" ${(t.pairingMethod||'snake')==='snake'?'selected':''}>Snake</option>
             <option value="random" ${t.pairingMethod==='random'?'selected':''}>Random</option>
             <option value="balanced" ${t.pairingMethod==='balanced'?'selected':''}>Balanceado</option>
+          </select>` : ''}
+          ${!isReview ? `<select class="input" style="width:auto;padding:0.35rem 0.6rem;font-size:0.8rem;" onchange="updateTableMode('${t.id}',this.value)">
+            <option value="multi" ${(t.tableMode||'multi')==='multi'?'selected':''}>Multi</option>
+            <option value="versus" ${t.tableMode==='versus'?'selected':''}>Versus</option>
           </select>` : ''}
           <a class="btn btn-ghost btn-sm" href="${profileHref(t.organizerUsername || t.organizerId)}" onclick="profileLinkClick(event,'${jsAttr(t.organizerUsername || t.organizerId)}')">Ver perfil</a>
           <button class="btn btn-ghost btn-sm" onclick="refreshTournament()">↻</button>
@@ -1016,10 +1311,14 @@ function renderOrganizerView(t) {
             <span class="section-title">Panel de Jugadores</span>
             ${renderPlayerControlPanel(t)}
           </div>
+          ${t.isOrganizer ? `<div class="card">
+            <span class="section-title">Moderadores</span>
+            ${renderModeratorPanel(t)}
+          </div>` : ''}
           ${t.prizes.length ? `
             <div class="card">
               <span class="section-title">Premios</span>
-              <div style="display:flex;flex-direction:column;gap:0.5rem;">
+              <div style="display:flex;flex-direction:column;gap:0.5rem;">${t.prizes.map(renderPrize).join('')}</div><div style="display:none;">
                 ${t.prizes.map(p => `<div class="prize-card">
                   ${p.imageUrl ? `<img src="${escHtml(p.imageUrl)}" style="width:28px;height:38px;object-fit:cover;border-radius:3px;" onerror="this.style.display='none'" />` : '🃏'}
                   <span style="font-size:0.88rem;">${escHtml(p.value)}</span>
@@ -1062,6 +1361,9 @@ function renderOrgTables(t, round) {
           ${resultBadge}
           ${tablesEditable && !finished ? '<span style="font-size:0.72rem;color:var(--text-hint);letter-spacing:0.05em;">arrastra</span>' : ''}
           ${!isBench && !finished && round.status === 'active' && table.startTime ? `<span id="sw-${table.id}" class="stopwatch-display"></span>` : ''}
+          ${!isBench && !finished && (round.status === 'active' || round.status === 'pending') ? `
+            <button class="btn btn-ghost btn-sm" onclick="adjustTableScores('${t.id}','${round.id}','${table.id}',-1)">Todos -1</button>
+            <button class="btn btn-ghost btn-sm" onclick="adjustTableScores('${t.id}','${round.id}','${table.id}',1)">Todos +1</button>` : ''}
           ${!isBench && !finished && round.status === 'active' ? `
             <button class="btn btn-outline btn-sm" onclick="openFinishTableModal('${t.id}','${round.id}','${table.id}')">
               Terminar Mesa
@@ -1087,6 +1389,8 @@ function renderOrgTables(t, round) {
           <div class="player-avatar">${initials(p.displayName)}</div>
           <span style="flex:1;font-weight:600;font-size:0.92rem;">${escHtml(p.displayName)}</span>
           ${anonymousBadge(p)}
+          ${cardBoxes(p)}
+          ${disciplineBadges(p)}
           ${!isBench && !finished && (round.status === 'active' || round.status === 'pending') ? `
             <div class="score-control">
               <button class="score-btn" onclick="adjustScore('${t.id}','${round.id}','${table.id}','${p.userId}',-1)">−</button>
@@ -1265,6 +1569,22 @@ async function setScoreAPI(tid, rid, tableId, userId, score) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+async function adjustTableScores(tid, rid, tableId, delta) {
+  try {
+    const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables/' + tableId + '/scores', { method: 'PATCH', body: { delta } });
+    _updateTournamentCache(t);
+    renderOrganizerView(t);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function adjustRoundScores(tid, rid, delta) {
+  try {
+    const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/scores', { method: 'PATCH', body: { delta } });
+    _updateTournamentCache(t);
+    renderOrganizerView(t);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 async function toggleEliminate(tid, rid, tableId, userId, eliminated) {
   try {
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables/' + tableId + '/players/' + userId, { method: 'PATCH', body: { eliminated } });
@@ -1296,12 +1616,19 @@ function refreshStandingsCard(t) {
 }
 
 function renderPlayerControlPanel(t) {
+  const openRound = (t.rounds || []).find(r => r.status === 'active' || r.status === 'pending');
   const playerRows = !t.players.length ? '<p style="color:var(--text-hint);font-size:0.9rem;">Sin jugadores.</p>' : `
     ${t.players.map(p => `
       <div class="card-elevated ${p.eliminatedFromTournament ? 'player-row disqualified' : ''}" style="display:flex;align-items:center;gap:0.65rem;padding:0.55rem 0.7rem;flex-wrap:wrap;">
         <div class="player-avatar" style="width:24px;height:24px;font-size:0.55rem;">${initials(p.displayName)}</div>
         <span style="flex:1;font-weight:600;font-size:0.86rem;${p.eliminatedFromTournament?'text-decoration:line-through;':''}">${escHtml(p.displayName)}</span>
         ${anonymousBadge(p)}
+        <div class="discipline-control">
+          ${cardBoxes(p)}
+          <button class="score-btn" title="Quitar amarilla" onclick="removeYellowCard('${t.id}','${p.userId}',${p.yellowCards||0},${!!p.redCard})">-</button>
+          <button class="score-btn" title="Agregar amarilla" onclick="addYellowCard('${t.id}','${p.userId}',${p.yellowCards||0},${!!p.redCard})">+</button>
+          <button class="btn btn-sm ${p.redCard?'btn-danger':'btn-ghost'}" onclick="setPlayerCards('${t.id}','${p.userId}',${p.redCard ? 0 : 2},${!p.redCard})">Roja</button>
+        </div>
         <div class="score-control">
           <button class="score-btn" onclick="adjustGlobalScore('${t.id}','${p.userId}',-1)">−</button>
           <span id="gs-${p.userId}" style="font-family:'Cinzel',serif;font-weight:700;min-width:1.6rem;text-align:center;">${p.score||0}</span>
@@ -1313,6 +1640,11 @@ function renderPlayerControlPanel(t) {
       </div>`).join('')}
   `;
   return `<div style="display:flex;flex-direction:column;gap:0.75rem;">
+    ${openRound ? `<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+      <span style="font-size:0.82rem;color:var(--text-muted);">Ronda actual (sin banca)</span>
+      <button class="btn btn-ghost btn-sm" onclick="adjustRoundScores('${t.id}','${openRound.id}',-1)">Todos -1</button>
+      <button class="btn btn-ghost btn-sm" onclick="adjustRoundScores('${t.id}','${openRound.id}',1)">Todos +1</button>
+    </div>` : ''}
     <div style="position:relative;">
       <input id="org-player-search" class="input" placeholder="Invitar o agregar jugador..." oninput="handleOrgPlayerSearch('${t.id}',this.value)" onblur="setTimeout(()=>hideOrgPlayerSearch(),200)" />
       <div id="org-player-search-dropdown" class="search-dropdown" style="display:none;"></div>
@@ -1327,6 +1659,43 @@ function renderPlayerControlPanel(t) {
     </div>
     <div style="display:flex;flex-direction:column;gap:0.5rem;">${playerRows}</div>
   </div>`;
+}
+
+function renderModeratorPanel(t) {
+  const activeModerators = (t.moderators || []).filter(m => m.active !== false);
+  return `<div style="display:flex;flex-direction:column;gap:0.75rem;">
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <input id="moderator-user-id" class="input" style="flex:1;min-width:160px;" placeholder="Username o link de perfil" />
+      <button class="btn btn-outline btn-sm" onclick="addModerator('${t.id}')">Agregar</button>
+    </div>
+    ${activeModerators.length ? activeModerators.map(m => `
+      <div class="card-elevated" style="display:flex;align-items:center;gap:0.65rem;padding:0.55rem 0.7rem;">
+        <div class="player-avatar" style="width:24px;height:24px;font-size:0.55rem;">${initials(m.displayName)}</div>
+        <span style="flex:1;font-weight:600;font-size:0.86rem;">${escHtml(m.displayName)}</span>
+        <button class="btn btn-danger btn-sm" onclick="removeModerator('${t.id}','${m.userId}')">Quitar</button>
+      </div>`).join('') : '<p style="color:var(--text-hint);font-size:0.9rem;">Sin moderadores activos.</p>'}
+  </div>`;
+}
+
+async function addModerator(tid) {
+  const input = document.getElementById('moderator-user-id');
+  const userId = extractProfileRef(input?.value);
+  if (!userId) return toast('Ingresa un username o link de perfil', 'error');
+  try {
+    const t = await api('/api/tournaments/' + tid + '/moderators', { method: 'POST', body: { userId } });
+    _updateTournamentCache(t);
+    if (App.currentView === 'lobby') renderLobby(t); else renderOrganizerView(t);
+    toast('Moderador agregado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removeModerator(tid, userId) {
+  try {
+    const t = await api('/api/tournaments/' + tid + '/moderators/' + encodeURIComponent(userId), { method: 'DELETE' });
+    _updateTournamentCache(t);
+    if (App.currentView === 'lobby') renderLobby(t); else renderOrganizerView(t);
+    toast('Moderador eliminado', 'info');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 let _opsTimeout;
@@ -1404,6 +1773,29 @@ async function toggleTournamentDisqualification(tid, userId, disqualified) {
 }
 
 // ─── FINISH TABLE MODAL ───────────────────────────────────────
+async function setPlayerCards(tid, userId, yellowCards, redCard) {
+  try {
+    const t = await api('/api/tournaments/' + tid + '/players/' + userId + '/status', {
+      method: 'PATCH',
+      body: { yellowCards: Math.max(0, Math.min(2, parseInt(yellowCards, 10) || 0)), redCard: !!redCard },
+    });
+    _updateTournamentCache(t);
+    renderOrganizerView(t);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function addYellowCard(tid, userId, yellowCards, redCard) {
+  if (redCard) return;
+  const next = (yellowCards || 0) + 1;
+  if (next >= 3) return setPlayerCards(tid, userId, 2, true);
+  return setPlayerCards(tid, userId, next, false);
+}
+
+function removeYellowCard(tid, userId, yellowCards, redCard) {
+  if (redCard) return setPlayerCards(tid, userId, 2, false);
+  return setPlayerCards(tid, userId, Math.max(0, (yellowCards || 0) - 1), false);
+}
+
 function openFinishTableModal(tid, rid, tableId, mode = 'finish') {
   const t = App.tournaments.find(tt => tt.id === tid);
   const round = t?.rounds.find(r => r.id === rid);
@@ -1591,7 +1983,7 @@ async function refreshTournament() {
   try {
     const t = await api('/api/tournaments/' + App.currentTournamentId);
     _updateTournamentCache(t);
-    const isOrg = App.currentUser && t.organizerId === App.currentUser.id;
+    const isOrg = isTournamentManager(t);
     if (isOrg) renderOrganizerView(t); else renderSpectatorView(t);
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -1605,7 +1997,7 @@ function renderSpectatorView(t) {
     document.getElementById('spectator-content').innerHTML = renderFinalResults(t, false);
     return;
   }
-  const isOrg = App.currentUser && t.organizerId === App.currentUser.id;
+  const isOrg = isTournamentManager(t);
   const activeRound = t.rounds.find(r => r.status === 'active');
   const isFinished = t.status === 'finished';
   const alreadyEnrolled = App.currentUser && t.players.some(p => p.userId === App.currentUser.id);
@@ -1624,6 +2016,7 @@ function renderSpectatorView(t) {
               </span>
               ${t.isRanked?'<span class="badge badge-gold">⭐ Rankeado</span>':''}
               <span class="badge badge-gray">Min. ${t.minimumPlayers || (t.isRanked ? 8 : 2)} jugadores</span>
+              ${viewerTournamentRoleBadge(t)}
               <a href="${profileHref(t.organizerUsername || t.organizerId)}" onclick="profileLinkClick(event,'${jsAttr(t.organizerUsername || t.organizerId)}')" style="font-size:0.82rem;color:var(--accent);cursor:pointer;">por ${escHtml(t.organizerName)}</a>
             </div>
           </div>
@@ -1691,6 +2084,8 @@ function renderSpectatorView(t) {
                       <div class="player-avatar">${initials(p.displayName)}</div>
                       <span style="flex:1;font-weight:600;">${escHtml(p.displayName)}</span>
                       ${anonymousBadge(p)}
+                      ${cardBoxes(p)}
+                      ${disciplineBadges(p)}
                       ${p.eliminated?'<span class="badge badge-red" style="font-size:0.7rem;">Elim.</span>':''}
                       <span style="font-family:\'Cinzel\',serif;font-size:1.05rem;font-weight:700;color:var(--accent);">${p.score||0}</span>
                     </div>`).join('')}
@@ -1730,7 +2125,7 @@ function renderSpectatorView(t) {
           ${t.prizes.length ? `
             <div class="card">
               <span class="section-title">Premios</span>
-              <div style="display:flex;flex-direction:column;gap:0.5rem;">
+              <div style="display:flex;flex-direction:column;gap:0.5rem;">${t.prizes.map(renderPrize).join('')}</div><div style="display:none;">
                 ${t.prizes.map(p => `<div class="prize-card">
                   ${p.imageUrl?`<img src="${escHtml(p.imageUrl)}" style="width:28px;height:38px;object-fit:cover;border-radius:3px;" onerror="this.style.display='none'" />`:'🃏'}
                   <span style="font-size:0.88rem;">${escHtml(p.value)}</span>
@@ -1860,6 +2255,7 @@ function renderStandings(players, tid, editable, rounds) {
       <th style="width:1.8rem;">#</th>
       <th>Jugador</th>
       <th style="text-align:right;" title="Puntos totales">Pts</th>
+      <th style="text-align:right;" title="Tarjetas">Tarj.</th>
       <th style="text-align:right;" title="Victorias">V</th>
       <th style="text-align:right;" title="Empates">E</th>
       <th style="text-align:right;" title="Opponent Win Percentage — desempate estándar TCG">OW%</th>
@@ -1884,6 +2280,7 @@ function renderStandings(players, tid, editable, rounds) {
               </div>` :
               `<span style="font-family:'Cinzel',serif;font-weight:700;font-size:0.88rem;">${p.score||0}</span>`}
           </td>
+          <td style="text-align:right;">${cardBoxes(p)}${p.eliminatedFromTournament ? '<span class="badge badge-red">DQ</span>' : ''}</td>
           <td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.wins||0}</td>
           <td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.draws||0}</td>
           <td style="text-align:right;font-size:0.78rem;color:var(--text-hint);" title="OW%: ${fmtOwp(p.owp)}">${fmtOwp(p.owp)}</td>
@@ -1903,13 +2300,23 @@ async function openProfile(userId) {
   } catch(e) { toast('No se pudo cargar el perfil', 'error'); }
 }
 
-function renderProfileView({ user, organizedActive, organizedFinished, playingIn, invitedTo = [], officialRanking = [] }) {
+function profileStatBox(label, value) {
+  return `<div class="card-elevated" style="padding:0.85rem;">
+    <div style="font-size:0.74rem;color:var(--text-hint);letter-spacing:0.08em;text-transform:uppercase;">${escHtml(label)}</div>
+    <div style="font-family:'Cinzel',serif;font-size:1.25rem;font-weight:700;color:var(--accent);margin-top:0.25rem;">${escHtml(String(value ?? ''))}</div>
+  </div>`;
+}
+
+function renderProfileView({ user, organizedActive, organizedFinished, moderatingActive = [], moderatedFinished = [], viewerOrganizedParticipations = [], playingIn, playedTournamentsVisible = true, profileStats = {}, invitedTo = [], officialRanking = [] }) {
   const isOwn = App.currentUser?.id === user.id;
-  const canInviteFromProfile = App.currentUser?.role === 'organizer' && !isOwn && organizerLobbyTournamentsForInvite(user.id).length > 0;
+  const canInviteFromProfile = !isOwn && organizerLobbyTournamentsForInvite(user.id).length > 0;
   // Normalizar _id → id para compatibilidad con MongoDB
   const normalize = t => ({ ...t, id: t._id || t.id });
   organizedActive   = organizedActive.map(normalize);
   organizedFinished = organizedFinished.map(normalize);
+  moderatingActive  = moderatingActive.map(normalize);
+  moderatedFinished = moderatedFinished.map(normalize);
+  viewerOrganizedParticipations = viewerOrganizedParticipations.map(normalize);
   playingIn         = playingIn.map(normalize);
   invitedTo         = invitedTo.map(normalize);
   document.getElementById('profile-content').innerHTML = `
@@ -1930,6 +2337,17 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
       </button>
     </div>
 
+    <div class="card" style="margin-bottom:1.5rem;">
+      <span class="section-title">Resumen publico</span>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:0.75rem;">
+        ${profileStatBox('Torneos', profileStats.tournamentsPlayed || 0)}
+        ${profileStatBox('Victorias', profileStats.tournamentWins || 0)}
+        ${profileStatBox('Descalificaciones', profileStats.disqualifications || 0)}
+        ${profileStatBox('Amarillas prom.', profileStats.averageYellowCards || 0)}
+        ${profileStatBox('Rojas prom.', profileStats.averageRedCards || 0)}
+      </div>
+    </div>
+
     ${isOwn ? `
       <div class="card" style="margin-bottom:1.5rem;">
         <span class="section-title">Preferencias de Invitacion</span>
@@ -1937,6 +2355,10 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
           <option value="manual" ${(user.invitationPolicy||'manual')==='manual'?'selected':''}>Aceptar mediante invitacion</option>
           <option value="auto" ${user.invitationPolicy==='auto'?'selected':''}>Aceptar automaticamente</option>
         </select>
+        <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.9rem;color:var(--text-muted);font-size:0.9rem;">
+          <input type="checkbox" ${user.showPlayedTournaments !== false ? 'checked' : ''} onchange="updatePlayedVisibility(this.checked)" />
+          Mostrar publicamente mis torneos jugados
+        </label>
       </div>` : ''}
 
     ${isOwn && invitedTo.length ? `
@@ -1978,6 +2400,30 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
         </div>
       </div>` : ''}
 
+    ${viewerOrganizedParticipations.length ? `
+      <div style="margin-bottom:1.5rem;">
+        <span class="section-title">Jugados en tus torneos (${viewerOrganizedParticipations.length})</span>
+        <div style="display:flex;flex-direction:column;gap:0.5rem;">
+          ${viewerOrganizedParticipations.map(t => profileTRow(t, true)).join('')}
+        </div>
+      </div>` : ''}
+
+    ${moderatingActive.length ? `
+      <div style="margin-bottom:1.5rem;">
+        <span class="section-title">Moderando ahora (${moderatingActive.length})</span>
+        <div style="display:flex;flex-direction:column;gap:0.5rem;">
+          ${moderatingActive.map(t => profileTRow(t, true)).join('')}
+        </div>
+      </div>` : ''}
+
+    ${moderatedFinished.length ? `
+      <div style="margin-bottom:1.5rem;">
+        <span class="section-title">Torneos Moderados (${moderatedFinished.length})</span>
+        <div style="display:flex;flex-direction:column;gap:0.5rem;">
+          ${moderatedFinished.map(t => profileTRow(t, false)).join('')}
+        </div>
+      </div>` : ''}
+
     ${playingIn.length ? `
       <div>
         <span class="section-title">Participando en (${playingIn.length})</span>
@@ -1986,7 +2432,10 @@ function renderProfileView({ user, organizedActive, organizedFinished, playingIn
         </div>
       </div>` : ''}
 
-    ${!organizedActive.length && !organizedFinished.length && !playingIn.length && !invitedTo.length ? `
+    ${!playedTournamentsVisible && !isOwn ? `
+      <div class="card" style="margin-bottom:1.5rem;color:var(--text-hint);">Esta persona mantiene privados sus torneos jugados.</div>` : ''}
+
+    ${!organizedActive.length && !organizedFinished.length && !viewerOrganizedParticipations.length && !moderatingActive.length && !moderatedFinished.length && !playingIn.length && !invitedTo.length ? `
       <div class="card" style="text-align:center;padding:3rem;color:var(--text-hint);">Sin actividad en torneos todavía.</div>` : ''}`;
 }
 
@@ -2014,9 +2463,9 @@ function profileTRow(t, canManage) {
 // TIMERS
 // ═══════════════════════════════════════════════════════════════
 function organizerLobbyTournamentsForInvite(userId) {
-  if (!App.currentUser || App.currentUser.role !== 'organizer') return [];
+  if (!App.currentUser) return [];
   return (App.tournaments || []).filter(t =>
-    t.organizerId === App.currentUser.id &&
+    (t.organizerId === App.currentUser.id || t.canManage || t.isModerator) &&
     t.status === 'lobby' &&
     !(t.players || []).some(player => player.userId === userId)
   );
@@ -2085,6 +2534,16 @@ async function updateInvitationPreference(invitationPolicy) {
     App.currentUser = r.user;
     renderHeader();
     toast('Preferencia actualizada', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function updatePlayedVisibility(showPlayedTournaments) {
+  try {
+    const r = await api('/api/users/me/preferences', { method: 'PATCH', body: { showPlayedTournaments } });
+    App.currentUser = r.user;
+    renderHeader();
+    toast('Privacidad actualizada', 'success');
+    openProfile(profileSlug(App.currentUser));
   } catch(e) { toast(e.message, 'error'); }
 }
 

@@ -5,6 +5,8 @@ const tablePlayerSchema = new mongoose.Schema({
   displayName: { type: String, required: true },
   isAnonymous: { type: Boolean, default: false },
   anonymousKey: { type: String, default: '' },
+  yellowCards: { type: Number, default: 0, min: 0, max: 2 },
+  redCard: { type: Boolean, default: false },
   score: { type: Number, default: 0 },
   eliminated: { type: Boolean, default: false },
   startScore: { type: Number, default: 0 },
@@ -47,6 +49,8 @@ const tournamentPlayerSchema = new mongoose.Schema({
   displayName: { type: String, required: true },
   isAnonymous: { type: Boolean, default: false },
   anonymousKey: { type: String, default: '' },
+  yellowCards: { type: Number, default: 0, min: 0, max: 2 },
+  redCard: { type: Boolean, default: false },
   score: { type: Number, default: 0 },
   manualScore: { type: Number, default: 0 },
   wins: { type: Number, default: 0 },
@@ -66,9 +70,55 @@ const joinRequestSchema = new mongoose.Schema({
 }, { _id: false });
 
 const prizeSchema = new mongoose.Schema({
-  type: { type: String, enum: ['text', 'card'], required: true },
+  type: { type: String, enum: ['text', 'card', 'credit'], required: true },
   value: { type: String, default: '' },
   imageUrl: { type: String, default: '' },
+  creditCount: { type: Number, default: 0, min: 0 },
+  creditValue: { type: Number, default: 0, min: 0 },
+  distribution: [{
+    place: { type: Number, required: true, min: 1 },
+    credits: { type: Number, required: true, min: 0 },
+    percentage: { type: Number, default: 0, min: 0, max: 100 },
+    _id: false,
+  }],
+}, { _id: false });
+
+const moderatorSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  displayName: { type: String, required: true },
+  username: { type: String, default: '' },
+  active: { type: Boolean, default: true },
+  addedAt: { type: Number, default: () => Date.now() },
+  addedBy: { type: String, default: '' },
+  removedAt: { type: Number, default: null },
+  removedBy: { type: String, default: '' },
+  completedAt: { type: Number, default: null },
+}, { _id: false });
+
+const moderatorEventSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  displayName: { type: String, default: '' },
+  action: { type: String, enum: ['add', 'remove'], required: true },
+  at: { type: Number, default: () => Date.now() },
+  phase: { type: String, default: '' },
+  actorId: { type: String, default: '' },
+}, { _id: false });
+
+const auditLogSchema = new mongoose.Schema({
+  type: { type: String, required: true },
+  actorId: { type: String, default: '' },
+  at: { type: Number, default: () => Date.now() },
+  phase: { type: String, default: '' },
+  payload: { type: mongoose.Schema.Types.Mixed, default: {} },
+}, { _id: false });
+
+const appealSchema = new mongoose.Schema({
+  id: { type: String, required: true },
+  userId: { type: String, required: true },
+  displayName: { type: String, default: '' },
+  reason: { type: String, default: '' },
+  status: { type: String, enum: ['pending', 'reviewed', 'resolved'], default: 'pending' },
+  createdAt: { type: Number, default: () => Date.now() },
 }, { _id: false });
 
 const tournamentSchema = new mongoose.Schema({
@@ -77,12 +127,14 @@ const tournamentSchema = new mongoose.Schema({
   organizerId: { type: String, required: true },
   organizerName: { type: String, required: true },
   organizerUsername: { type: String, default: '' },
+  scheduledStartAt: { type: Number, default: null },
   totalRounds: { type: Number, required: true, min: 1 },
   roundDuration: { type: Number, required: true, min: 0 },
   status: { type: String, enum: ['lobby', 'active', 'review', 'finished'], default: 'lobby' },
   visibility: { type: String, enum: ['public', 'approval', 'private'], default: 'public' },
   isRanked: { type: Boolean, default: false },
   pairingMethod: { type: String, enum: ['snake', 'random', 'balanced'], default: 'snake' },
+  tableMode: { type: String, enum: ['multi', 'versus'], default: 'multi' },
   rankingApplied: { type: Boolean, default: false },
   rankingFormulaVersion: { type: Number, default: 0 },
   rankingDeltas: [{
@@ -95,6 +147,10 @@ const tournamentSchema = new mongoose.Schema({
     _id: false,
   }],
   prizes: [prizeSchema],
+  moderators: [moderatorSchema],
+  moderatorEvents: [moderatorEventSchema],
+  auditLog: [auditLogSchema],
+  appeals: [appealSchema],
   players: [tournamentPlayerSchema],
   joinRequests: [joinRequestSchema],
   rounds: [roundSchema],

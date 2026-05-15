@@ -4,7 +4,7 @@ const { now } = require('../../shared/utils/dates');
 const userRepository = require('../users/user.repository');
 const tournamentRepository = require('./tournament.repository');
 const policies = require('./tournament.policies');
-const { generateRound, redistributePlayers } = require('./domain/matchmaking');
+const { generateRound } = require('./domain/matchmaking');
 const { accumulateRoundScores, inferTableResult } = require('./domain/scoring');
 const { RANKING_FORMULA_VERSION, calculateRankingDeltas } = require('./domain/ranking');
 const { anonymousPlayerIdentity } = require('./domain/anonymousPlayers');
@@ -45,16 +45,22 @@ async function createTournament(data, organizerId) {
     organizerId,
     organizerName: organizer.displayName,
     organizerUsername: organizer.username,
+    scheduledStartAt: data.scheduledStartAt || null,
     totalRounds: data.totalRounds,
     roundDuration: data.roundDuration,
     status: 'lobby',
     visibility: data.visibility || 'public',
     isRanked: !!(organizer.isLicensed && organizer.role === 'organizer'),
     pairingMethod: data.pairingMethod || 'snake',
+    tableMode: data.tableMode || 'multi',
     rankingApplied: false,
     rankingFormulaVersion: 0,
     rankingDeltas: [],
     prizes: data.prizes || [],
+    moderators: [],
+    moderatorEvents: [],
+    auditLog: [],
+    appeals: [],
     players: [],
     joinRequests: [],
     rounds: [],
@@ -65,7 +71,7 @@ async function createTournament(data, organizerId) {
 async function addPlayer(tournamentId, sessionUserId, playerRequest = {}) {
   const tournament = await loadTournament(tournamentId);
 
-  const requesterIsOrganizer = policies.isOrganizer(tournament, sessionUserId);
+  const requesterIsOrganizer = policies.canManageTournament(tournament, sessionUserId);
   assertStatus(
     tournament,
     requesterIsOrganizer ? ['lobby', 'active'] : ['lobby'],
@@ -81,6 +87,11 @@ async function addPlayer(tournamentId, sessionUserId, playerRequest = {}) {
       throw ApiError.conflict('El jugador ya esta en el torneo');
     }
     addPlayerToTournament(tournament, anonymousPlayer);
+    recordAuditEvent(tournament, sessionUserId, 'anonymous_player_added', {
+      userId: anonymousPlayer.uid,
+      displayName: anonymousPlayer.displayName,
+      anonymousKey: anonymousPlayer.anonymousKey,
+    });
     return save(tournament);
   }
 
@@ -95,9 +106,11 @@ async function addPlayer(tournamentId, sessionUserId, playerRequest = {}) {
   if (requesterIsOrganizer) {
     if ((user.invitationPolicy || 'manual') === 'auto') {
       addPlayerToTournament(tournament, user);
+      recordAuditEvent(tournament, sessionUserId, 'player_added', { userId: user.uid, displayName: user.displayName });
       return save(tournament);
     }
     createInvitation(tournament, user, sessionUserId);
+    recordAuditEvent(tournament, sessionUserId, 'player_invited', { userId: user.uid, displayName: user.displayName });
     await save(tournament);
     return { requested: true, invited: true, message: 'Invitacion enviada. El jugador debe aceptarla.' };
   }
@@ -113,18 +126,22 @@ async function addPlayer(tournamentId, sessionUserId, playerRequest = {}) {
     if (pending) throw ApiError.conflict('Ya tienes una solicitud pendiente');
 
     createJoinRequest(tournament, user);
+    recordAuditEvent(tournament, sessionUserId, 'join_request_created', { userId: user.uid, displayName: user.displayName });
     await save(tournament);
     return { requested: true, message: 'Solicitud enviada. El organizador debe aceptarla.' };
   }
 
   addPlayerToTournament(tournament, user);
+  recordAuditEvent(tournament, sessionUserId, 'player_self_joined', { userId: user.uid, displayName: user.displayName });
   return save(tournament);
 }
 
 async function removePlayer(tournamentId, organizerId, userId) {
   const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
   assertStatus(tournament, ['lobby'], 'No se puede quitar jugadores con el torneo activo');
+  const player = tournament.players.find(current => current.userId === userId);
   tournament.players = tournament.players.filter(player => player.userId !== userId);
+  if (player) recordAuditEvent(tournament, organizerId, 'player_removed', { userId, displayName: player.displayName });
   return save(tournament);
 }
 
@@ -133,7 +150,9 @@ async function setPlayerScore(tournamentId, organizerId, userId, score) {
   assertStatus(tournament, ['lobby', 'active', 'review', 'finished'], 'Estado de torneo invalido');
   const player = tournament.players.find(p => p.userId === userId);
   if (!player) throw ApiError.notFound('Jugador no encontrado');
+  const before = player.score || 0;
   setManualTotalScore(tournament, player, score);
+  recordAuditEvent(tournament, organizerId, 'player_score_set', { userId, before, after: player.score });
   if (tournament.status === 'finished') updateRankingSnapshot(tournament);
   const saved = await save(tournament);
   if (tournament.status === 'finished') await rebuildOrganizerRanking(tournament.organizerId);
@@ -150,7 +169,12 @@ async function handleJoinRequest(tournamentId, organizerId, userId, action) {
 
   if (action === 'accept') {
     const user = await userRepository.findByUid(request.userId);
-    if (user && !tournament.players.some(player => player.userId === user.uid)) addPlayerToTournament(tournament, user);
+    if (user && !tournament.players.some(player => player.userId === user.uid)) {
+      addPlayerToTournament(tournament, user);
+      recordAuditEvent(tournament, organizerId, 'join_request_accepted', { userId: user.uid, displayName: user.displayName });
+    }
+  } else {
+    recordAuditEvent(tournament, organizerId, 'join_request_rejected', { userId: request.userId, displayName: request.displayName });
   }
 
   return save(tournament);
@@ -165,7 +189,12 @@ async function handleInvitation(tournamentId, playerId, action) {
   request.status = action === 'accept' ? 'accepted' : 'rejected';
   if (action === 'accept') {
     const user = await userRepository.findByUid(playerId);
-    if (user && !tournament.players.some(player => player.userId === user.uid)) addPlayerToTournament(tournament, user);
+    if (user && !tournament.players.some(player => player.userId === user.uid)) {
+      addPlayerToTournament(tournament, user);
+      recordAuditEvent(tournament, playerId, 'invitation_accepted', { userId: user.uid, displayName: user.displayName });
+    }
+  } else {
+    recordAuditEvent(tournament, playerId, 'invitation_rejected', { userId: playerId });
   }
 
   return save(tournament);
@@ -181,7 +210,7 @@ async function startTournament(tournamentId, organizerId) {
 
   tournament.status = 'active';
   tournament.currentRound = 1;
-  const tables = generateRound(tournament.players, 1, tournament.pairingMethod || 'snake');
+  const tables = generateRound(tournament.players, 1, tournament.pairingMethod || 'snake', tournament.tableMode || 'multi');
   for (const table of tables) table.status = 'pending';
   tables.push(createBenchTable([]));
   tournament.rounds.push({
@@ -197,12 +226,14 @@ async function startTournament(tournamentId, organizerId) {
     status: 'pending',
   });
 
+  recordAuditEvent(tournament, organizerId, 'tournament_started', { playerCount: tournament.players.length });
   return save(tournament);
 }
 
 async function listOrganizerPlayerSuggestions(tournamentId, organizerId) {
   const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
   const tournaments = await tournamentRepository.findAll();
+  const ownerId = tournament.organizerId;
   const currentPlayerIds = new Set(tournament.players.map(player => player.userId));
   const pendingPlayerIds = new Set(
     (tournament.joinRequests || [])
@@ -214,7 +245,7 @@ async function listOrganizerPlayerSuggestions(tournamentId, organizerId) {
 
   for (const playedTournament of tournaments) {
     const playedTournamentId = playedTournament._id || playedTournament.id;
-    if (playedTournament.organizerId !== organizerId || playedTournamentId === currentTournamentId) continue;
+    if (playedTournament.organizerId !== ownerId || playedTournamentId === currentTournamentId) continue;
     const playedAt = playedTournament.updatedAt || playedTournament.createdAt || 0;
 
     for (const player of playedTournament.players || []) {
@@ -246,12 +277,82 @@ async function listOrganizerPlayerSuggestions(tournamentId, organizerId) {
     .slice(0, 16);
 }
 
+async function addModerator(tournamentId, organizerId, userId) {
+  const tournament = await loadTournamentForOrganizerOwner(tournamentId, organizerId);
+  const user = await userRepository.findByPublicId(userId);
+  if (!user) throw ApiError.notFound('Usuario no encontrado');
+  if (user.uid === tournament.organizerId) throw ApiError.badRequest('El organizador ya administra este torneo');
+
+  const existing = (tournament.moderators || []).find(moderator => moderator.userId === user.uid);
+  if (existing?.active) throw ApiError.conflict('Este usuario ya es moderador');
+
+  const at = now();
+  if (existing) {
+    existing.displayName = user.displayName;
+    existing.username = user.username;
+    existing.active = true;
+    existing.addedAt = at;
+    existing.addedBy = organizerId;
+    existing.removedAt = null;
+    existing.removedBy = '';
+    existing.completedAt = null;
+  } else {
+    tournament.moderators.push({
+      userId: user.uid,
+      displayName: user.displayName,
+      username: user.username,
+      active: true,
+      addedAt: at,
+      addedBy: organizerId,
+      removedAt: null,
+      removedBy: '',
+      completedAt: null,
+    });
+  }
+
+  const event = {
+    userId: user.uid,
+    displayName: user.displayName,
+    action: 'add',
+    at,
+    phase: tournamentPhase(tournament),
+    actorId: organizerId,
+  };
+  tournament.moderatorEvents.push(event);
+  recordAuditEvent(tournament, organizerId, 'moderator_added', event);
+  return save(tournament);
+}
+
+async function removeModerator(tournamentId, organizerId, userId) {
+  const tournament = await loadTournamentForOrganizerOwner(tournamentId, organizerId);
+  const moderator = (tournament.moderators || []).find(current => current.userId === userId && current.active !== false);
+  if (!moderator) throw ApiError.notFound('Moderador no encontrado');
+
+  const at = now();
+  moderator.active = false;
+  moderator.removedAt = at;
+  moderator.removedBy = organizerId;
+
+  const event = {
+    userId,
+    displayName: moderator.displayName,
+    action: 'remove',
+    at,
+    phase: tournamentPhase(tournament),
+    actorId: organizerId,
+  };
+  tournament.moderatorEvents.push(event);
+  recordAuditEvent(tournament, organizerId, 'moderator_removed', event);
+  return save(tournament);
+}
+
 async function replaceRoundTables(tournamentId, organizerId, roundId, tables) {
   const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
   const round = findRound(tournament, roundId);
   assertTablesEditable(round, 'Las mesas estan bloqueadas durante la ronda activa');
   ensureBench(round);
   round.tables = validateAndRebuildTables(round.tables, tables, tournament.players);
+  recordAuditEvent(tournament, organizerId, 'tables_reordered', { roundId, tableCount: round.tables.length });
   return save(tournament);
 }
 
@@ -265,7 +366,43 @@ async function updateTablePlayer(tournamentId, organizerId, roundId, tableId, us
 
   if (changes.score !== undefined) player.score = normalizeNonNegativeInt(changes.score);
   if (changes.eliminated !== undefined) player.eliminated = !!changes.eliminated;
+  recordAuditEvent(tournament, organizerId, 'table_player_updated', { roundId, tableId, userId, changes });
 
+  return save(tournament);
+}
+
+async function adjustTableScores(tournamentId, organizerId, roundId, tableId, delta) {
+  const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
+  const round = findRound(tournament, roundId);
+  const table = findTable(round, tableId);
+  if (table.type === 'bench') throw ApiError.badRequest('La banca no recibe ajuste masivo');
+  assertStatus(table, ['pending', 'active'], 'No se puede modificar una mesa finalizada');
+  const parsedDelta = parseInt(delta, 10);
+  if (!Number.isFinite(parsedDelta) || parsedDelta === 0) throw ApiError.badRequest('Ajuste invalido');
+
+  for (const player of table.players) {
+    if (player.eliminated) continue;
+    player.score = Math.max(0, (player.score || 0) + parsedDelta);
+  }
+  recordAuditEvent(tournament, organizerId, 'table_scores_adjusted', { roundId, tableId, delta: parsedDelta });
+  return save(tournament);
+}
+
+async function adjustRoundScores(tournamentId, organizerId, roundId, delta) {
+  const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
+  const round = findRound(tournament, roundId);
+  assertStatus(round, ['pending', 'active'], 'No se puede modificar una ronda finalizada');
+  const parsedDelta = parseInt(delta, 10);
+  if (!Number.isFinite(parsedDelta) || parsedDelta === 0) throw ApiError.badRequest('Ajuste invalido');
+
+  for (const table of round.tables) {
+    if (table.type === 'bench') continue;
+    for (const player of table.players) {
+      if (player.eliminated) continue;
+      player.score = Math.max(0, (player.score || 0) + parsedDelta);
+    }
+  }
+  recordAuditEvent(tournament, organizerId, 'round_scores_adjusted', { roundId, delta: parsedDelta });
   return save(tournament);
 }
 
@@ -288,6 +425,7 @@ async function activateRound(tournamentId, organizerId, roundId) {
     table.endTime = null;
   }
 
+  recordAuditEvent(tournament, organizerId, 'round_activated', { roundId });
   return save(tournament);
 }
 
@@ -297,6 +435,7 @@ async function pauseRound(tournamentId, organizerId, roundId) {
   assertStatus(round, ['active'], 'Solo se puede pausar una ronda activa');
   if (round.pausedAt) throw ApiError.conflict('La ronda ya esta pausada');
   round.pausedAt = now();
+  recordAuditEvent(tournament, organizerId, 'round_paused', { roundId });
   return save(tournament);
 }
 
@@ -307,6 +446,7 @@ async function resumeRound(tournamentId, organizerId, roundId) {
   if (!round.pausedAt) throw ApiError.conflict('La ronda no esta pausada');
   round.totalPausedMs = (round.totalPausedMs || 0) + Math.max(0, now() - round.pausedAt);
   round.pausedAt = null;
+  recordAuditEvent(tournament, organizerId, 'round_resumed', { roundId });
   return save(tournament);
 }
 
@@ -322,6 +462,7 @@ async function updateRoundTime(tournamentId, organizerId, roundId, data) {
 
   round.timeLimitMinutes = normalizeRoundDuration(nextLimit);
   if (round.status === 'pending') tournament.roundDuration = round.timeLimitMinutes;
+  recordAuditEvent(tournament, organizerId, 'round_time_updated', { roundId, timeLimitMinutes: round.timeLimitMinutes });
   return save(tournament);
 }
 
@@ -330,6 +471,7 @@ async function updateRoundEditing(tournamentId, organizerId, roundId, unlocked) 
   const round = findRound(tournament, roundId);
   assertStatus(round, ['active'], 'El bloqueo solo aplica a rondas activas');
   round.tableEditingUnlocked = !!unlocked;
+  recordAuditEvent(tournament, organizerId, 'round_editing_updated', { roundId, unlocked: round.tableEditingUnlocked });
   return save(tournament);
 }
 
@@ -344,6 +486,7 @@ async function finishTable(tournamentId, organizerId, roundId, tableId, data) {
   applyExplicitResult(table, data);
   table.endTime = now();
   table.status = 'finished';
+  recordAuditEvent(tournament, organizerId, 'table_finished', { roundId, tableId, result: table.result, winner: table.winner || null });
 
   if (round.tables.filter(currentTable => currentTable.type !== 'bench').every(currentTable => currentTable.status === 'finished')) {
     await finishRoundState(tournament, round);
@@ -379,17 +522,21 @@ async function finishRound(tournamentId, organizerId, roundId, data) {
   }
 
   await finishRoundState(tournament, round, finishedAt);
+  recordAuditEvent(tournament, organizerId, 'round_finished', { roundId });
   return save(tournament);
 }
 
 async function updateTournamentSettings(tournamentId, organizerId, data) {
   const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
+  assertStatus(tournament, ['lobby', 'active', 'review'], 'No se puede modificar un torneo finalizado');
   if (data.pairingMethod) tournament.pairingMethod = data.pairingMethod;
+  if (data.tableMode) tournament.tableMode = data.tableMode;
   if (data.roundDuration !== undefined) {
     tournament.roundDuration = normalizeRoundDuration(data.roundDuration);
     const openRound = currentOpenRound(tournament);
     if (openRound?.status === 'pending') openRound.timeLimitMinutes = tournament.roundDuration;
   }
+  recordAuditEvent(tournament, organizerId, 'tournament_settings_updated', data);
   return save(tournament);
 }
 
@@ -409,6 +556,7 @@ async function addTable(tournamentId, organizerId, roundId) {
     endTime: null,
   };
   round.tables.splice(round.tables.indexOf(bench), 0, table);
+  recordAuditEvent(tournament, organizerId, 'table_created', { roundId, tableId: table.id });
   return save(tournament);
 }
 
@@ -426,6 +574,7 @@ async function deleteTable(tournamentId, organizerId, roundId, tableId) {
   const bench = getBench(round);
   bench.players.push(...table.players);
   round.tables = round.tables.filter(current => current.id !== table.id);
+  recordAuditEvent(tournament, organizerId, 'table_deleted', { roundId, tableId, movedPlayers: table.players.map(player => player.userId) });
   return save(tournament);
 }
 
@@ -435,7 +584,6 @@ async function shuffleRoundPlayers(tournamentId, organizerId, roundId) {
   assertTablesEditable(round, 'Las mesas estan bloqueadas durante la ronda activa');
   ensureBench(round);
 
-  const normalTables = round.tables.filter(table => table.type !== 'bench');
   const bench = getBench(round);
   const allPlayers = round.tables.flatMap(table => table.players);
   const disqualifiedIds = new Set(tournament.players.filter(player => player.eliminatedFromTournament).map(player => player.userId));
@@ -447,31 +595,42 @@ async function shuffleRoundPlayers(tournamentId, organizerId, roundId) {
       tableScore: player.score || 0,
       score: tournamentPlayerById.get(player.userId)?.score ?? player.score ?? 0,
       wins: tournamentPlayerById.get(player.userId)?.wins ?? 0,
+      yellowCards: tournamentPlayerById.get(player.userId)?.yellowCards ?? player.yellowCards ?? 0,
+      redCard: tournamentPlayerById.get(player.userId)?.redCard ?? !!player.redCard,
     }));
   const disqualified = allPlayers.filter(player => disqualifiedIds.has(player.userId));
 
-  for (const table of normalTables) table.players = [];
   bench.players = disqualified.map(player => ({ ...player, eliminated: true }));
 
-  const redistributed = redistributePlayers(
+  const redistributedTables = generateRound(
     movable,
-    normalTables.length,
+    round.number || tournament.currentRound,
     tournament.pairingMethod || 'snake',
-    round.number || tournament.currentRound
+    tournament.tableMode || 'multi'
   );
 
-  for (let i = 0; i < normalTables.length; i++) {
-    normalTables[i].players = (redistributed[i] || []).map(player => ({
-      userId: player.userId,
-      displayName: player.displayName,
-      isAnonymous: !!player.isAnonymous,
-      anonymousKey: player.anonymousKey || '',
-      score: player.tableScore || 0,
-      eliminated: false,
-      startScore: player.startScore ?? tournamentPlayerById.get(player.userId)?.score ?? 0,
-    }));
+  for (const table of redistributedTables) {
+    table.status = round.status === 'active' ? 'active' : 'pending';
+    table.startTime = round.status === 'active' ? (round.startTime || now()) : null;
+    table.players = table.players.map(player => {
+      const source = movable.find(current => current.userId === player.userId) || player;
+      return {
+        ...player,
+        score: source.tableScore || 0,
+        startScore: source.startScore ?? tournamentPlayerById.get(player.userId)?.score ?? 0,
+        yellowCards: tournamentPlayerById.get(player.userId)?.yellowCards || source.yellowCards || 0,
+        redCard: tournamentPlayerById.get(player.userId)?.redCard || !!source.redCard,
+      };
+    });
   }
+  round.tables = [...redistributedTables, bench];
 
+  recordAuditEvent(tournament, organizerId, 'round_players_redistributed', {
+    roundId,
+    tableCount: redistributedTables.length,
+    method: tournament.pairingMethod,
+    tableMode: tournament.tableMode,
+  });
   return save(tournament);
 }
 
@@ -481,10 +640,25 @@ async function setTournamentPlayerStatus(tournamentId, organizerId, userId, data
   const player = tournament.players.find(p => p.userId === userId);
   if (!player) throw ApiError.notFound('Jugador no encontrado');
 
-  if (data.score !== undefined) setManualTotalScore(tournament, player, data.score);
+  if (data.score !== undefined) {
+    const before = player.score || 0;
+    setManualTotalScore(tournament, player, data.score);
+    recordAuditEvent(tournament, organizerId, 'player_score_set', { userId, before, after: player.score });
+  }
   if (data.disqualified !== undefined) {
     if (data.disqualified) disqualifyPlayer(tournament, player);
     else reinstatePlayer(tournament, player);
+    recordAuditEvent(tournament, organizerId, data.disqualified ? 'player_disqualified' : 'player_reinstated', { userId, displayName: player.displayName });
+  }
+  if (data.yellowCards !== undefined || data.redCard !== undefined) {
+    const before = { yellowCards: player.yellowCards || 0, redCard: !!player.redCard };
+    setPlayerCards(tournament, player, data);
+    recordAuditEvent(tournament, organizerId, 'player_cards_updated', {
+      userId,
+      displayName: player.displayName,
+      before,
+      after: { yellowCards: player.yellowCards || 0, redCard: !!player.redCard },
+    });
   }
 
   if (tournament.status === 'finished') updateRankingSnapshot(tournament);
@@ -504,9 +678,37 @@ async function reviseTable(tournamentId, organizerId, roundId, tableId, data) {
   applyExplicitResult(table, data);
   recomputeTournamentRecords(tournament);
   if (tournament.status === 'finished') updateRankingSnapshot(tournament);
+  recordAuditEvent(tournament, organizerId, 'table_result_revised', { roundId, tableId, result: table.result, winner: table.winner || null });
   const saved = await save(tournament);
   if (tournament.status === 'finished') await rebuildOrganizerRanking(tournament.organizerId);
   return saved;
+}
+
+async function appealPlayerDiscipline(tournamentId, playerId, data = {}) {
+  const tournament = await loadTournament(tournamentId);
+  assertStatus(tournament, ['finished'], 'Solo se puede apelar en torneos finalizados');
+  const player = tournament.players.find(current => current.userId === playerId);
+  if (!player) throw ApiError.notFound('Jugador no encontrado');
+  if (!player.eliminatedFromTournament && !(player.yellowCards || player.redCard)) {
+    throw ApiError.badRequest('No hay tarjetas o descalificacion para apelar');
+  }
+
+  const alreadyPending = (tournament.appeals || []).some(appeal =>
+    appeal.userId === playerId && appeal.status === 'pending'
+  );
+  if (alreadyPending) throw ApiError.conflict('Ya tienes una apelacion pendiente');
+
+  const appeal = {
+    id: createId(),
+    userId: player.userId,
+    displayName: player.displayName,
+    reason: String(data.reason || '').trim(),
+    status: 'pending',
+    createdAt: now(),
+  };
+  tournament.appeals.push(appeal);
+  recordAuditEvent(tournament, playerId, 'discipline_appealed', { userId: playerId, appealId: appeal.id });
+  return save(tournament);
 }
 
 async function finalizeTournamentResults(tournamentId, organizerId) {
@@ -517,7 +719,9 @@ async function finalizeTournamentResults(tournamentId, organizerId) {
 
   recomputeTournamentRecords(tournament);
   tournament.status = 'finished';
+  markActiveModeratorsCompleted(tournament);
   updateRankingSnapshot(tournament);
+  recordAuditEvent(tournament, organizerId, 'tournament_results_finalized', { playerCount: tournament.players.length });
   const saved = await save(tournament);
   await rebuildOrganizerRanking(tournament.organizerId);
   return saved;
@@ -558,8 +762,16 @@ async function loadTournament(id) {
 
 async function loadTournamentForOrganizer(id, organizerId) {
   const tournament = await loadTournament(id);
+  if (!policies.canManageTournament(tournament, organizerId)) {
+    throw ApiError.forbidden('Solo el organizador o un moderador puede realizar esta accion');
+  }
+  return tournament;
+}
+
+async function loadTournamentForOrganizerOwner(id, organizerId) {
+  const tournament = await loadTournament(id);
   if (!policies.isOrganizer(tournament, organizerId)) {
-    throw ApiError.forbidden('Solo el organizador puede realizar esta accion');
+    throw ApiError.forbidden('Solo el organizador principal puede realizar esta accion');
   }
   return tournament;
 }
@@ -577,6 +789,8 @@ function playerEntry(user) {
     draws: 0,
     eliminatedFromTournament: false,
     disqualifiedAt: null,
+    yellowCards: 0,
+    redCard: false,
   };
 }
 
@@ -617,6 +831,8 @@ function addPlayerToTournament(tournament, user) {
         displayName: player.displayName,
         isAnonymous: player.isAnonymous,
         anonymousKey: player.anonymousKey,
+        yellowCards: player.yellowCards || 0,
+        redCard: !!player.redCard,
         score: 0,
         eliminated: false,
         startScore: 0,
@@ -631,18 +847,39 @@ function minimumPlayersForTournament(tournament) {
 
 function normalizeTournament(tournament) {
   tournament.pairingMethod = tournament.pairingMethod || 'snake';
+  tournament.tableMode = tournament.tableMode || 'multi';
   tournament.roundDuration = normalizeRoundDuration(tournament.roundDuration);
   tournament.joinRequests = tournament.joinRequests || [];
   tournament.rounds = tournament.rounds || [];
   tournament.players = tournament.players || [];
+  tournament.moderators = tournament.moderators || [];
+  tournament.moderatorEvents = tournament.moderatorEvents || [];
+  tournament.auditLog = tournament.auditLog || [];
+  tournament.appeals = tournament.appeals || [];
+  tournament.prizes = tournament.prizes || [];
+  tournament.rankingDeltas = tournament.rankingDeltas || [];
   for (const round of tournament.rounds) {
     round.timeLimitMinutes = round.timeLimitMinutes ?? tournament.roundDuration;
     round.totalPausedMs = round.totalPausedMs || 0;
     round.pausedAt = round.pausedAt || null;
     round.tableEditingUnlocked = !!round.tableEditingUnlocked;
     ensureBench(round);
+    for (const table of round.tables || []) {
+      table.players = table.players || [];
+      for (const tablePlayer of table.players) {
+        const tournamentPlayer = tournament.players.find(player => player.userId === tablePlayer.userId);
+        tablePlayer.yellowCards = tournamentPlayer?.yellowCards || tablePlayer.yellowCards || 0;
+        tablePlayer.redCard = tournamentPlayer?.redCard || !!tablePlayer.redCard;
+      }
+    }
   }
-  for (const player of tournament.players) normalizePlayerManualScore(tournament, player);
+  for (const player of tournament.players) {
+    normalizePlayerManualScore(tournament, player);
+    player.yellowCards = Math.min(2, Math.max(0, Number(player.yellowCards) || 0));
+    player.redCard = !!player.redCard;
+    if (player.redCard) player.yellowCards = 2;
+    syncPlayerCards(tournament, player.userId, player.yellowCards, player.redCard);
+  }
 }
 
 function normalizeRoundDuration(value) {
@@ -695,6 +932,67 @@ function nextTableNumber(round) {
 
 function currentOpenRound(tournament) {
   return tournament.rounds.find(round => round.status === 'pending' || round.status === 'active') || null;
+}
+
+function tournamentPhase(tournament) {
+  if (tournament.status === 'active') {
+    const round = currentOpenRound(tournament);
+    if (round) return `${tournament.status}:round-${round.number}:${round.status}`;
+  }
+  return tournament.status || 'unknown';
+}
+
+function recordAuditEvent(tournament, actorId, type, payload = {}) {
+  tournament.auditLog = tournament.auditLog || [];
+  tournament.auditLog.push({
+    type,
+    actorId: actorId || '',
+    at: now(),
+    phase: tournamentPhase(tournament),
+    payload,
+  });
+  if (tournament.auditLog.length > 1000) {
+    tournament.auditLog = tournament.auditLog.slice(tournament.auditLog.length - 1000);
+  }
+}
+
+function setPlayerCards(tournament, player, data) {
+  let yellowCards = data.yellowCards !== undefined
+    ? normalizeNonNegativeInt(data.yellowCards)
+    : (player.yellowCards || 0);
+  let redCard = data.redCard !== undefined ? !!data.redCard : !!player.redCard;
+
+  if (yellowCards > 2) {
+    yellowCards = 2;
+    redCard = true;
+  }
+  yellowCards = Math.min(2, yellowCards);
+  if (redCard) yellowCards = 2;
+
+  player.yellowCards = yellowCards;
+  player.redCard = redCard;
+  syncPlayerCards(tournament, player.userId, yellowCards, redCard);
+}
+
+function syncPlayerCards(tournament, userId, yellowCards, redCard) {
+  for (const round of tournament.rounds || []) {
+    for (const table of round.tables || []) {
+      for (const tablePlayer of table.players || []) {
+        if (tablePlayer.userId !== userId) continue;
+        tablePlayer.yellowCards = yellowCards;
+        tablePlayer.redCard = redCard;
+      }
+    }
+  }
+}
+
+function markActiveModeratorsCompleted(tournament) {
+  const completedAt = now();
+  for (const moderator of tournament.moderators || []) {
+    if (moderator.active !== false && !moderator.completedAt) {
+      moderator.completedAt = completedAt;
+    }
+  }
 }
 
 function applyExplicitResult(table, data) {
@@ -751,7 +1049,12 @@ function prepareNextRound(tournament) {
   }
 
   tournament.currentRound += 1;
-  const nextTables = generateRound(tournament.players, tournament.currentRound, tournament.pairingMethod || 'snake');
+  const nextTables = generateRound(
+    tournament.players,
+    tournament.currentRound,
+    tournament.pairingMethod || 'snake',
+    tournament.tableMode || 'multi'
+  );
   for (const table of nextTables) table.status = 'pending';
   const disqualifiedPlayers = tournament.players
     .filter(player => player.eliminatedFromTournament)
@@ -760,6 +1063,8 @@ function prepareNextRound(tournament) {
       displayName: player.displayName,
       isAnonymous: !!player.isAnonymous,
       anonymousKey: player.anonymousKey || '',
+      yellowCards: player.yellowCards || 0,
+      redCard: !!player.redCard,
       score: 0,
       eliminated: true,
       startScore: player.score || 0,
@@ -821,6 +1126,8 @@ function reinstatePlayer(tournament, player) {
         displayName: player.displayName,
         isAnonymous: !!player.isAnonymous,
         anonymousKey: player.anonymousKey || '',
+        yellowCards: player.yellowCards || 0,
+        redCard: !!player.redCard,
         score: 0,
         eliminated: false,
         startScore: player.score || 0,
@@ -944,6 +1251,8 @@ module.exports = {
   getTournament,
   createTournament,
   addPlayer,
+  addModerator,
+  removeModerator,
   removePlayer,
   setPlayerScore,
   handleJoinRequest,
@@ -951,6 +1260,8 @@ module.exports = {
   listOrganizerPlayerSuggestions,
   replaceRoundTables,
   updateTablePlayer,
+  adjustTableScores,
+  adjustRoundScores,
   activateRound,
   pauseRound,
   resumeRound,
@@ -965,6 +1276,7 @@ module.exports = {
   shuffleRoundPlayers,
   setTournamentPlayerStatus,
   reviseTable,
+  appealPlayerDiscipline,
   finalizeTournamentResults,
   ensureOrganizerRankingsCurrent,
   rebuildAllOrganizerRankings,

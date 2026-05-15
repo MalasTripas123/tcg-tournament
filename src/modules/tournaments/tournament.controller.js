@@ -40,6 +40,16 @@ async function playerSuggestions(req, res) {
   return ok(res, suggestions);
 }
 
+async function addModerator(req, res) {
+  const tournament = await tournamentService.addModerator(req.params.id, req.session.userId, req.validated.body.userId);
+  return ok(res, presentTournament(tournament, viewer(req)));
+}
+
+async function removeModerator(req, res) {
+  const tournament = await tournamentService.removeModerator(req.params.id, req.session.userId, req.params.userId);
+  return ok(res, presentTournament(tournament, viewer(req)));
+}
+
 async function removePlayer(req, res) {
   const tournament = await tournamentService.removePlayer(req.params.id, req.session.userId, req.params.userId);
   return ok(res, presentTournament(tournament, viewer(req)));
@@ -121,11 +131,41 @@ async function updateTablePlayer(req, res) {
   return ok(res, presentTournament(tournament, viewer(req)));
 }
 
+async function adjustTableScores(req, res) {
+  const tournament = await tournamentService.adjustTableScores(
+    req.params.id,
+    req.session.userId,
+    req.params.roundId,
+    req.params.tableId,
+    req.validated.body.delta
+  );
+  return ok(res, presentTournament(tournament, viewer(req)));
+}
+
+async function adjustRoundScores(req, res) {
+  const tournament = await tournamentService.adjustRoundScores(
+    req.params.id,
+    req.session.userId,
+    req.params.roundId,
+    req.validated.body.delta
+  );
+  return ok(res, presentTournament(tournament, viewer(req)));
+}
+
 async function updateTournamentPlayer(req, res) {
   const tournament = await tournamentService.setTournamentPlayerStatus(
     req.params.id,
     req.session.userId,
     req.params.userId,
+    req.validated.body
+  );
+  return ok(res, presentTournament(tournament, viewer(req)));
+}
+
+async function appealPlayerDiscipline(req, res) {
+  const tournament = await tournamentService.appealPlayerDiscipline(
+    req.params.id,
+    req.session.userId,
     req.validated.body
   );
   return ok(res, presentTournament(tournament, viewer(req)));
@@ -209,6 +249,8 @@ module.exports = {
   create,
   addPlayer,
   playerSuggestions,
+  addModerator,
+  removeModerator,
   removePlayer,
   setPlayerScore,
   handleJoinRequest,
@@ -220,7 +262,10 @@ module.exports = {
   deleteTable,
   shuffleTables,
   updateTablePlayer,
+  adjustTableScores,
+  adjustRoundScores,
   updateTournamentPlayer,
+  appealPlayerDiscipline,
   finishTable,
   reviseTable,
   activateRound,

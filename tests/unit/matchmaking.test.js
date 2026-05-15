@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   calculateTableSizes,
+  calculateVersusTableSizes,
   generateRound,
   redistributePlayers,
 } = require('../../src/modules/tournaments/domain/matchmaking');
@@ -14,6 +15,14 @@ test('calculateTableSizes prefers pods of 4 and avoids pods of 2 when possible',
   assert.deepEqual(calculateTableSizes(9), [3, 3, 3]);
   assert.deepEqual(calculateTableSizes(10), [4, 3, 3]);
   assert.deepEqual(calculateTableSizes(13), [4, 3, 3, 3]);
+});
+
+test('calculateTableSizes supports versus tables of two with one odd table of three', () => {
+  assert.deepEqual(calculateVersusTableSizes(2), [2]);
+  assert.deepEqual(calculateVersusTableSizes(3), [3]);
+  assert.deepEqual(calculateVersusTableSizes(5), [3, 2]);
+  assert.deepEqual(calculateVersusTableSizes(8), [2, 2, 2, 2]);
+  assert.deepEqual(calculateTableSizes(7, 'versus'), [3, 2, 2]);
 });
 
 test('generateRound keeps eliminated tournament players out of pairings', () => {

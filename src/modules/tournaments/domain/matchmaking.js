@@ -1,4 +1,21 @@
-function calculateTableSizes(n) {
+function calculateVersusTableSizes(n) {
+  if (n <= 0) return [];
+  if (n <= 3) return [n];
+  const tables = [];
+  let remaining = n;
+  if (remaining % 2 === 1) {
+    tables.push(3);
+    remaining -= 3;
+  }
+  while (remaining > 0) {
+    tables.push(Math.min(2, remaining));
+    remaining -= 2;
+  }
+  return tables;
+}
+
+function calculateTableSizes(n, tableMode = 'multi') {
+  if (tableMode === 'versus') return calculateVersusTableSizes(n);
   if (n < 2) return [n];
   if (n === 2) return [2];
   if (n === 3) return [3];
@@ -22,13 +39,13 @@ function calculateTableSizes(n) {
   return tables;
 }
 
-function randomPairing(players) {
+function randomPairing(players, tableMode = 'multi') {
   const shuffled = [...players].sort(() => Math.random() - 0.5);
-  return assignToTables(shuffled);
+  return assignToTables(shuffled, tableMode);
 }
 
-function snakePairing(players) {
-  const sizes = calculateTableSizes(players.length);
+function snakePairing(players, tableMode = 'multi') {
+  const sizes = calculateTableSizes(players.length, tableMode);
   const tables = [];
   let lo = 0;
   let hi = players.length - 1;
@@ -48,8 +65,8 @@ function snakePairing(players) {
   return tables;
 }
 
-function assignToTables(orderedPlayers) {
-  const sizes = calculateTableSizes(orderedPlayers.length);
+function assignToTables(orderedPlayers, tableMode = 'multi') {
+  const sizes = calculateTableSizes(orderedPlayers.length, tableMode);
   return splitBySizes(orderedPlayers, sizes).map((players, index) => createTable(index + 1, players));
 }
 
@@ -61,6 +78,8 @@ function createTable(index, players) {
       displayName: player.displayName,
       isAnonymous: !!player.isAnonymous,
       anonymousKey: player.anonymousKey || '',
+      yellowCards: player.yellowCards || 0,
+      redCard: !!player.redCard,
       score: 0,
       eliminated: false,
       startScore: player.score || 0,
@@ -70,12 +89,12 @@ function createTable(index, players) {
   };
 }
 
-function balancedPairing(players) {
+function balancedPairing(players, tableMode = 'multi') {
   const ranked = [...players].sort((a, b) => {
     if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
     return (b.wins || 0) - (a.wins || 0);
   });
-  const sizes = calculateTableSizes(ranked.length);
+  const sizes = calculateTableSizes(ranked.length, tableMode);
   const buckets = sizes.map((size, index) => ({ id: `t${index + 1}`, size, players: [] }));
   let tableIndex = 0;
   let direction = 1;
@@ -104,18 +123,18 @@ function balancedPairing(players) {
   return buckets.map((bucket, index) => createTable(index + 1, bucket.players));
 }
 
-function generateRound(players, roundNumber, method = 'snake') {
+function generateRound(players, roundNumber, method = 'snake', tableMode = 'multi') {
   const activePlayers = players.filter(player => !player.eliminatedFromTournament);
-  if (method === 'random') return randomPairing(activePlayers);
-  if (method === 'balanced') return balancedPairing(activePlayers);
-  if (roundNumber === 1) return randomPairing(activePlayers);
+  if (method === 'random') return randomPairing(activePlayers, tableMode);
+  if (method === 'balanced') return balancedPairing(activePlayers, tableMode);
+  if (roundNumber === 1) return randomPairing(activePlayers, tableMode);
 
   const ranked = [...activePlayers].sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     return (b.wins || 0) - (a.wins || 0);
   });
 
-  return snakePairing(ranked);
+  return snakePairing(ranked, tableMode);
 }
 
 function calculateEvenTableSizes(playerCount, tableCount) {
@@ -207,6 +226,7 @@ function redistributePlayers(players, tableCount, method = 'snake', roundNumber 
 
 module.exports = {
   calculateTableSizes,
+  calculateVersusTableSizes,
   calculateEvenTableSizes,
   randomPairing,
   snakePairing,

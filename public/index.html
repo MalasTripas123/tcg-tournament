@@ -61,6 +61,14 @@
           <label class="section-title">Nombre del Torneo</label>
           <input id="t-name" class="input" type="text" placeholder="Ej: Torneo Semanal Dragon's Lair" required />
         </div>
+        <div style="margin-bottom:1.25rem;">
+          <label class="section-title">Fecha y hora de inicio</label>
+          <label style="display:flex;align-items:center;gap:0.55rem;color:var(--text-muted);font-size:0.92rem;margin-bottom:0.65rem;">
+            <input id="t-has-start" type="checkbox" onchange="toggleStartDateInput(this.checked)" />
+            Programar inicio del torneo
+          </label>
+          <input id="t-start" class="input" type="datetime-local" disabled />
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem;" class="two-col">
           <div>
             <label class="section-title">Número de Rondas</label>
@@ -88,12 +96,20 @@
             <option value="balanced">Balanceado - reparte puntajes altos entre mesas</option>
           </select>
         </div>
+        <div style="margin-bottom:1.25rem;">
+          <label class="section-title">Tipo de mesas</label>
+          <select id="t-table-mode" class="input">
+            <option value="multi">Multi - mesas de hasta 4 jugadores</option>
+            <option value="versus">Versus - mesas de 2 jugadores cuando sea posible</option>
+          </select>
+        </div>
         <div style="margin-bottom:1.5rem;">
           <label class="section-title" style="margin-bottom:0.75rem;">Premios (Opcional)</label>
           <div id="prizes-list" style="display:flex;flex-direction:column;gap:0.75rem;margin-bottom:0.75rem;"></div>
           <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
             <button type="button" class="btn btn-ghost btn-sm" onclick="addPrize('text')">+ Premio en texto</button>
             <button type="button" class="btn btn-ghost btn-sm" onclick="addPrize('card')">+ Carta como premio</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="addPrize('credit')">+ Creditos de tienda</button>
           </div>
         </div>
         <button type="submit" class="btn btn-primary" style="width:100%;">Crear Torneo →</button>
@@ -123,6 +139,7 @@
           <button type="button" class="btn btn-outline btn-sm" onclick="addAnonymousPlayerToLobby()">Agregar anonimo</button>
         </div>
       </div>
+      <div id="lobby-moderators" style="margin-bottom:1.5rem;"></div>
       <div id="lobby-player-suggestions" style="margin-bottom:1.5rem;"></div>
       <!-- Solicitudes pendientes -->
       <div id="lobby-requests" style="margin-bottom:1rem;"></div>

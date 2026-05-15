@@ -1,9 +1,10 @@
 const ApiError = require('../../shared/http/ApiError');
 
 const VISIBILITY = new Set(['public', 'approval', 'private']);
-const PRIZE_TYPES = new Set(['text', 'card']);
+const PRIZE_TYPES = new Set(['text', 'card', 'credit']);
 const RESULTS = new Set(['winner', 'draw', 'none']);
 const PAIRING_METHODS = new Set(['snake', 'random', 'balanced']);
+const TABLE_MODES = new Set(['multi', 'versus']);
 
 function asString(value, field, max = 160) {
   if (typeof value !== 'string' || !value.trim()) throw ApiError.badRequest(`${field} es requerido`);
@@ -28,16 +29,49 @@ function asInt(value, field, min, max, fallback) {
   return parsed;
 }
 
+function optionalTimestamp(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number.isFinite(Number(value)) ? Number(value) : Date.parse(String(value));
+  if (!Number.isFinite(parsed) || parsed < 0) throw ApiError.badRequest('Fecha de inicio invalida');
+  return parsed;
+}
+
 function validatePrizes(prizes) {
   if (!Array.isArray(prizes)) return [];
   if (prizes.length > 20) throw ApiError.badRequest('Demasiados premios');
   return prizes.map(prize => {
     const type = PRIZE_TYPES.has(prize?.type) ? prize.type : null;
     if (!type) throw ApiError.badRequest('Tipo de premio invalido');
+    if (type === 'credit') {
+      const creditCount = asInt(prize.creditCount, 'Creditos', 1, 999);
+      const creditValue = asInt(prize.creditValue, 'Valor del credito', 0, 999999999);
+      const distribution = Array.isArray(prize.distribution) ? prize.distribution : [];
+      if (!distribution.length) throw ApiError.badRequest('La reparticion de creditos es requerida');
+      const parsedDistribution = distribution.map((entry, index) => ({
+        place: index + 1,
+        credits: asInt(entry?.credits, 'Creditos por puesto', 0, creditCount),
+      })).filter(entry => entry.credits > 0);
+      const totalCredits = parsedDistribution.reduce((sum, entry) => sum + entry.credits, 0);
+      if (totalCredits !== creditCount) throw ApiError.badRequest('La reparticion debe sumar todos los creditos');
+      return {
+        type,
+        value: optionalString(prize.value, 180),
+        imageUrl: '',
+        creditCount,
+        creditValue,
+        distribution: parsedDistribution.map(entry => ({
+          ...entry,
+          percentage: Math.round((entry.credits / creditCount) * 10000) / 100,
+        })),
+      };
+    }
     return {
       type,
       value: optionalString(prize.value, 180),
       imageUrl: optionalString(prize.imageUrl, 600),
+      creditCount: 0,
+      creditValue: 0,
+      distribution: [],
     };
   });
 }
@@ -49,10 +83,12 @@ function validateCreateTournament(req) {
   return {
     body: {
       name: asString(req.body.name, 'Nombre', 140),
+      scheduledStartAt: optionalTimestamp(req.body.scheduledStartAt),
       totalRounds: asInt(req.body.totalRounds, 'Rondas', 1, 20),
       roundDuration: asInt(req.body.roundDuration, 'Duracion', 0, 240, 50),
       visibility,
       pairingMethod: PAIRING_METHODS.has(req.body.pairingMethod) ? req.body.pairingMethod : 'snake',
+      tableMode: TABLE_MODES.has(req.body.tableMode) ? req.body.tableMode : 'multi',
       prizes: validatePrizes(req.body.prizes),
     },
   };
@@ -98,6 +134,10 @@ function validateTournamentSettings(req) {
     if (!PAIRING_METHODS.has(req.body.pairingMethod)) throw ApiError.badRequest('Metodo de emparejamiento invalido');
     body.pairingMethod = req.body.pairingMethod;
   }
+  if (req.body.tableMode !== undefined) {
+    if (!TABLE_MODES.has(req.body.tableMode)) throw ApiError.badRequest('Modo de mesas invalido');
+    body.tableMode = req.body.tableMode;
+  }
   if (req.body.roundDuration !== undefined) body.roundDuration = asInt(req.body.roundDuration, 'Duracion', 0, 240);
   if (!Object.keys(body).length) throw ApiError.badRequest('No hay cambios para aplicar');
   return { body };
@@ -107,8 +147,34 @@ function validateTournamentPlayerStatus(req) {
   const body = {};
   if (req.body.score !== undefined) body.score = asInt(req.body.score, 'Puntaje', 0, 999);
   if (req.body.disqualified !== undefined) body.disqualified = !!req.body.disqualified;
+  if (req.body.yellowCards !== undefined) body.yellowCards = asInt(req.body.yellowCards, 'Tarjetas amarillas', 0, 2);
+  if (req.body.redCard !== undefined) body.redCard = !!req.body.redCard;
   if (!Object.keys(body).length) throw ApiError.badRequest('No hay cambios para aplicar');
   return { body };
+}
+
+function validateModerator(req) {
+  return {
+    body: {
+      userId: typeof req.body.userId === 'string' ? req.body.userId.trim() : '',
+    },
+  };
+}
+
+function validateScoreDelta(req) {
+  return {
+    body: {
+      delta: asInt(req.body.delta, 'Ajuste de puntos', -999, 999),
+    },
+  };
+}
+
+function validateAppeal(req) {
+  return {
+    body: {
+      reason: optionalString(req.body.reason, 600),
+    },
+  };
 }
 
 function validateReplaceTables(req) {
@@ -179,7 +245,10 @@ module.exports = {
   validateJoinRequestAction,
   validateInvitationAction,
   validateTournamentSettings,
+  validateModerator,
   validateTournamentPlayerStatus,
+  validateScoreDelta,
+  validateAppeal,
   validateReplaceTables,
   validateUpdateTablePlayer,
   validateFinishTable,

@@ -7,12 +7,19 @@ function validateSearchUsers(req) {
 }
 
 function validateInvitationPolicy(req) {
-  const invitationPolicy = req.body.invitationPolicy;
-  if (!['manual', 'auto'].includes(invitationPolicy)) {
-    const ApiError = require('../../shared/http/ApiError');
-    throw ApiError.badRequest('Preferencia de invitacion invalida');
+  const body = {};
+  if (req.body.invitationPolicy !== undefined) {
+    const invitationPolicy = req.body.invitationPolicy;
+    if (!['manual', 'auto'].includes(invitationPolicy)) {
+      throw ApiError.badRequest('Preferencia de invitacion invalida');
+    }
+    body.invitationPolicy = invitationPolicy;
   }
-  return { body: { invitationPolicy } };
+  if (req.body.showPlayedTournaments !== undefined) {
+    body.showPlayedTournaments = !!req.body.showPlayedTournaments;
+  }
+  if (!Object.keys(body).length) throw ApiError.badRequest('No hay preferencias para actualizar');
+  return { body };
 }
 
 module.exports = { validateSearchUsers, validateInvitationPolicy };
