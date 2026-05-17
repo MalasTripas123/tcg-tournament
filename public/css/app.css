@@ -80,6 +80,11 @@
     .round-time-controls label { display: inline-flex; align-items: center; gap: 0.45rem; color: var(--text-muted); font-size: 0.85rem; }
     .round-time-controls .input { width: 82px; padding: 0.35rem 0.5rem; }
     .time-note { color: var(--text-muted); font-size: 0.85rem; }
+    .autosave-status { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 999px; padding: 0.2rem 0.55rem; color: var(--text-hint); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+    .autosave-status.autosave-pending { color: var(--warning); border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); }
+    .autosave-status.autosave-saving { color: #fbbf24; border-color: rgba(245,158,11,0.45); background: rgba(245,158,11,0.1); }
+    .autosave-status.autosave-saved { color: var(--success); border-color: rgba(34,197,94,0.28); background: rgba(34,197,94,0.06); }
+    .autosave-status.autosave-error { color: var(--danger); border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.08); }
 
     /* BADGES */
     .badge { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 0.2rem 0.6rem; border-radius: 20px; }

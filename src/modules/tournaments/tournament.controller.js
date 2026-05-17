@@ -152,6 +152,16 @@ async function adjustRoundScores(req, res) {
   return ok(res, presentTournament(tournament, viewer(req)));
 }
 
+async function applyRoundChanges(req, res) {
+  const tournament = await tournamentService.applyRoundChanges(
+    req.params.id,
+    req.session.userId,
+    req.params.roundId,
+    req.validated.body.changes
+  );
+  return ok(res, presentTournament(tournament, viewer(req)));
+}
+
 async function updateTournamentPlayer(req, res) {
   const tournament = await tournamentService.setTournamentPlayerStatus(
     req.params.id,
@@ -264,6 +274,7 @@ module.exports = {
   updateTablePlayer,
   adjustTableScores,
   adjustRoundScores,
+  applyRoundChanges,
   updateTournamentPlayer,
   appealPlayerDiscipline,
   finishTable,

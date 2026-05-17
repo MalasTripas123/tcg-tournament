@@ -29,6 +29,7 @@ router.patch('/:id/settings', requireAuth, validateRequest(validators.validateTo
 router.put('/:id/rounds/:roundId/tables', requireAuth, validateRequest(validators.validateReplaceTables), asyncHandler(controller.replaceTables));
 router.post('/:id/rounds/:roundId/tables', requireAuth, asyncHandler(controller.addTable));
 router.post('/:id/rounds/:roundId/tables/shuffle', requireAuth, asyncHandler(controller.shuffleTables));
+router.patch('/:id/rounds/:roundId/changes', requireAuth, validateRequest(validators.validateRoundChanges), asyncHandler(controller.applyRoundChanges));
 router.patch('/:id/rounds/:roundId/scores', requireAuth, validateRequest(validators.validateScoreDelta), asyncHandler(controller.adjustRoundScores));
 router.delete('/:id/rounds/:roundId/tables/:tableId', requireAuth, asyncHandler(controller.deleteTable));
 router.patch('/:id/rounds/:roundId/tables/:tableId/scores', requireAuth, validateRequest(validators.validateScoreDelta), asyncHandler(controller.adjustTableScores));

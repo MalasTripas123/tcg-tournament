@@ -190,6 +190,46 @@ function validateUpdateTablePlayer(req) {
   return { body };
 }
 
+function validateRoundChanges(req) {
+  const incomingChanges = Array.isArray(req.body.changes) ? req.body.changes : [];
+  if (!incomingChanges.length) throw ApiError.badRequest('No hay cambios para aplicar');
+  if (incomingChanges.length > 200) throw ApiError.badRequest('Demasiados cambios en una sola operacion');
+
+  const changes = incomingChanges.map(change => {
+    if (change?.type === 'tables') {
+      if (!Array.isArray(change.tables)) throw ApiError.badRequest('Mesas invalidas');
+      return { type: 'tables', tables: change.tables };
+    }
+
+    if (change?.type === 'tablePlayer') {
+      const tableId = typeof change.tableId === 'string' ? change.tableId : '';
+      const userId = typeof change.userId === 'string' ? change.userId : '';
+      if (!tableId || !userId) throw ApiError.badRequest('Cambio de jugador invalido');
+      const parsed = { type: 'tablePlayer', tableId, userId };
+      if (change.score !== undefined) parsed.score = asInt(change.score, 'Puntaje', 0, 999);
+      if (change.eliminated !== undefined) parsed.eliminated = !!change.eliminated;
+      if (parsed.score === undefined && parsed.eliminated === undefined) {
+        throw ApiError.badRequest('Cambio de jugador vacio');
+      }
+      return parsed;
+    }
+
+    if (change?.type === 'playerScore') {
+      const userId = typeof change.userId === 'string' ? change.userId : '';
+      if (!userId) throw ApiError.badRequest('Jugador invalido');
+      return {
+        type: 'playerScore',
+        userId,
+        score: asInt(change.score, 'Puntaje', 0, 999),
+      };
+    }
+
+    throw ApiError.badRequest('Tipo de cambio invalido');
+  });
+
+  return { body: { changes } };
+}
+
 function validateFinishTable(req) {
   const result = req.body.result || 'none';
   if (!RESULTS.has(result)) throw ApiError.badRequest('Resultado invalido');
@@ -251,6 +291,7 @@ module.exports = {
   validateAppeal,
   validateReplaceTables,
   validateUpdateTablePlayer,
+  validateRoundChanges,
   validateFinishTable,
   validateFinishRound,
   validateRoundTime,

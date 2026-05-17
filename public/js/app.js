@@ -9,7 +9,12 @@ const App = {
   prizes: [],
   timers: {}, // { id: intervalId }
   expiredRounds: new Set(),
+  pendingRoundChanges: {},
+  autosaveTimers: {},
+  autosaveStatus: {},
 };
+
+const AUTOSAVE_DELAY_MS = 750;
 
 // ═══════════════════════════════════════════════════════════════
 // INIT
@@ -120,6 +125,228 @@ async function api(url, opts = {}) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Error del servidor');
   return data;
+}
+
+// Cambios frecuentes de ronda: se aplican localmente y se guardan en lote.
+function roundChangeKey(tid, rid) {
+  return tid + ':' + rid;
+}
+
+function cloneTables(tables) {
+  return (tables || []).map(table => ({
+    ...table,
+    players: (table.players || []).map(player => ({ ...player })),
+  }));
+}
+
+function getRoundChangeBucket(tid, rid) {
+  const key = roundChangeKey(tid, rid);
+  if (!App.pendingRoundChanges[key]) {
+    App.pendingRoundChanges[key] = {
+      tid,
+      rid,
+      version: 0,
+      tables: null,
+      tablePlayers: {},
+      playerScores: {},
+      inFlight: false,
+      promise: null,
+    };
+  }
+  return App.pendingRoundChanges[key];
+}
+
+function serializeRoundChanges(bucket) {
+  if (!bucket) return [];
+  const changes = [];
+  if (bucket.tables) changes.push({ type: 'tables', tables: cloneTables(bucket.tables) });
+  changes.push(...Object.values(bucket.tablePlayers));
+  changes.push(...Object.values(bucket.playerScores));
+  return changes;
+}
+
+function tableIdForPlayer(tables, userId) {
+  const table = (tables || []).find(currentTable =>
+    (currentTable.players || []).some(player => player.userId === userId)
+  );
+  return table?.id || null;
+}
+
+function realignBucketTablePlayers(bucket) {
+  if (!bucket?.tables) return;
+  const changes = Object.values(bucket.tablePlayers);
+  bucket.tablePlayers = {};
+  for (const change of changes) {
+    const tableId = tableIdForPlayer(bucket.tables, change.userId) || change.tableId;
+    bucket.tablePlayers[tableId + ':' + change.userId] = { ...change, tableId };
+  }
+}
+
+function hasPendingRoundChanges(tid) {
+  return Object.values(App.pendingRoundChanges).some(bucket => {
+    if (tid && bucket.tid !== tid) return false;
+    return bucket.inFlight || serializeRoundChanges(bucket).length > 0;
+  });
+}
+
+function autosaveStatusText(status) {
+  return ({
+    pending: 'Cambios pendientes',
+    saving: 'Guardando...',
+    saved: 'Guardado',
+    error: 'Error al guardar',
+  })[status || 'saved'] || 'Guardado';
+}
+
+function autosaveStatusClass(tid, rid) {
+  const status = App.autosaveStatus[roundChangeKey(tid, rid)]?.status || 'saved';
+  return 'autosave-status autosave-' + status;
+}
+
+function autosaveStatusLabel(tid, rid) {
+  const status = App.autosaveStatus[roundChangeKey(tid, rid)]?.status || 'saved';
+  return autosaveStatusText(status);
+}
+
+function setAutosaveStatus(tid, rid, status) {
+  const key = roundChangeKey(tid, rid);
+  App.autosaveStatus[key] = { status, updatedAt: Date.now() };
+  const el = document.getElementById('autosave-status-' + rid);
+  if (el) {
+    el.className = autosaveStatusClass(tid, rid);
+    el.textContent = autosaveStatusText(status);
+  }
+}
+
+function applyRoundChangesToLocalTournament(tid, rid, changes) {
+  const t = App.tournaments.find(tt => tt.id === tid);
+  const round = t?.rounds.find(r => r.id === rid);
+  if (!round) return t;
+
+  for (const change of changes) {
+    if (change.type === 'tables') {
+      round.tables = cloneTables(change.tables);
+      continue;
+    }
+    if (change.type === 'tablePlayer') {
+      const table = round.tables.find(tb => tb.id === change.tableId);
+      const player = table?.players.find(p => p.userId === change.userId);
+      if (!player) continue;
+      if (change.score !== undefined) player.score = Math.max(0, parseInt(change.score, 10) || 0);
+      if (change.eliminated !== undefined) player.eliminated = !!change.eliminated;
+      continue;
+    }
+    if (change.type === 'playerScore') {
+      const player = (t.players || []).find(p => p.userId === change.userId);
+      if (player) player.score = Math.max(0, parseInt(change.score, 10) || 0);
+    }
+  }
+  return t;
+}
+
+function queueRoundChange(tid, rid, change) {
+  const bucket = getRoundChangeBucket(tid, rid);
+  if (change.type === 'tables') {
+    bucket.tables = cloneTables(change.tables);
+    realignBucketTablePlayers(bucket);
+  } else if (change.type === 'tablePlayer') {
+    const tableId = bucket.tables ? (tableIdForPlayer(bucket.tables, change.userId) || change.tableId) : change.tableId;
+    const key = change.tableId + ':' + change.userId;
+    const normalizedKey = tableId + ':' + change.userId;
+    const current = bucket.tablePlayers[normalizedKey] || bucket.tablePlayers[key] || {
+      type: 'tablePlayer',
+      tableId,
+      userId: change.userId,
+    };
+    current.tableId = tableId;
+    if (change.score !== undefined) current.score = Math.max(0, parseInt(change.score, 10) || 0);
+    if (change.eliminated !== undefined) current.eliminated = !!change.eliminated;
+    bucket.tablePlayers[normalizedKey] = current;
+    if (normalizedKey !== key) delete bucket.tablePlayers[key];
+  } else if (change.type === 'playerScore') {
+    bucket.playerScores[change.userId] = {
+      type: 'playerScore',
+      userId: change.userId,
+      score: Math.max(0, parseInt(change.score, 10) || 0),
+    };
+  }
+
+  bucket.version += 1;
+  setAutosaveStatus(tid, rid, 'pending');
+  scheduleRoundFlush(tid, rid);
+}
+
+function scheduleRoundFlush(tid, rid) {
+  const key = roundChangeKey(tid, rid);
+  clearTimeout(App.autosaveTimers[key]);
+  App.autosaveTimers[key] = setTimeout(() => {
+    flushRoundChanges(tid, rid).catch(() => {});
+  }, AUTOSAVE_DELAY_MS);
+}
+
+async function flushRoundChanges(tid, rid) {
+  const key = roundChangeKey(tid, rid);
+  const bucket = App.pendingRoundChanges[key];
+  if (!bucket) return;
+  if (bucket.inFlight) return bucket.promise;
+
+  clearTimeout(App.autosaveTimers[key]);
+  delete App.autosaveTimers[key];
+
+  const changes = serializeRoundChanges(bucket);
+  if (!changes.length) {
+    delete App.pendingRoundChanges[key];
+    setAutosaveStatus(tid, rid, 'saved');
+    return;
+  }
+
+  const version = bucket.version;
+  bucket.inFlight = true;
+  setAutosaveStatus(tid, rid, 'saving');
+
+  bucket.promise = api('/api/tournaments/' + tid + '/rounds/' + rid + '/changes', {
+    method: 'PATCH',
+    body: { changes },
+  }).then(t => {
+    _updateTournamentCache(t);
+    const current = App.pendingRoundChanges[key];
+    if (current && current.version !== version) {
+      applyRoundChangesToLocalTournament(tid, rid, serializeRoundChanges(current));
+      current.inFlight = false;
+      current.promise = null;
+      setAutosaveStatus(tid, rid, 'pending');
+      scheduleRoundFlush(tid, rid);
+      return t;
+    }
+
+    delete App.pendingRoundChanges[key];
+    setAutosaveStatus(tid, rid, 'saved');
+    return t;
+  }).catch(e => {
+    const current = App.pendingRoundChanges[key];
+    if (current) {
+      current.inFlight = false;
+      current.promise = null;
+      setAutosaveStatus(tid, rid, 'error');
+    }
+    toast('No se pudieron guardar cambios pendientes: ' + e.message, 'error');
+    throw e;
+  });
+
+  return bucket.promise;
+}
+
+async function flushAllPendingChanges(tid = null, rid = null) {
+  const keys = Object.keys(App.pendingRoundChanges).filter(key => {
+    const bucket = App.pendingRoundChanges[key];
+    if (tid && bucket.tid !== tid) return false;
+    if (rid && bucket.rid !== rid) return false;
+    return true;
+  });
+  await Promise.all(keys.map(key => {
+    const bucket = App.pendingRoundChanges[key];
+    return flushRoundChanges(bucket.tid, bucket.rid);
+  }));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -924,6 +1151,7 @@ async function startTournament() {
 
 async function updatePairingMethod(tid, pairingMethod) {
   try {
+    await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/settings', { method: 'PATCH', body: { pairingMethod } });
     _updateTournamentCache(t);
     if (App.currentTournamentId === tid) renderOrganizerView(t);
@@ -933,6 +1161,7 @@ async function updatePairingMethod(tid, pairingMethod) {
 
 async function updateTableMode(tid, tableMode) {
   try {
+    await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/settings', { method: 'PATCH', body: { tableMode } });
     _updateTournamentCache(t);
     if (App.currentTournamentId === tid) renderOrganizerView(t);
@@ -942,6 +1171,7 @@ async function updateTableMode(tid, tableMode) {
 
 async function addTable(tid, rid) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables', { method: 'POST' });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -950,6 +1180,7 @@ async function addTable(tid, rid) {
 
 async function deleteTable(tid, rid, tableId) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables/' + tableId, { method: 'DELETE' });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -958,6 +1189,7 @@ async function deleteTable(tid, rid, tableId) {
 
 async function shufflePlayers(tid, rid) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables/shuffle', { method: 'POST' });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -967,6 +1199,7 @@ async function shufflePlayers(tid, rid) {
 async function updateRoundDuration(tid, rid, value) {
   const roundDuration = Math.max(0, parseInt(value, 10) || 0);
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/time', {
       method: 'PATCH',
       body: { timeLimitMinutes: roundDuration },
@@ -979,6 +1212,7 @@ async function updateRoundDuration(tid, rid, value) {
 
 async function adjustRoundTime(tid, rid, deltaMinutes) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/time', {
       method: 'PATCH',
       body: { deltaMinutes },
@@ -990,6 +1224,7 @@ async function adjustRoundTime(tid, rid, deltaMinutes) {
 
 async function pauseRound(tid, rid) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/pause', { method: 'POST' });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -999,6 +1234,7 @@ async function pauseRound(tid, rid) {
 
 async function resumeRound(tid, rid) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/resume', { method: 'POST' });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -1008,6 +1244,7 @@ async function resumeRound(tid, rid) {
 
 async function toggleRoundEditing(tid, rid, unlocked) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/editing', {
       method: 'PATCH',
       body: { unlocked },
@@ -1020,6 +1257,7 @@ async function toggleRoundEditing(tid, rid, unlocked) {
 
 async function finalizeTournamentResults(tid) {
   try {
+    await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/finalize-results', { method: 'POST' });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -1214,6 +1452,7 @@ function renderOrganizerView(t) {
             <span class="badge badge-purple">${phase.label}</span>
             <span class="badge badge-gray">${tableModeLabel(t.tableMode)}</span>
             ${viewerTournamentRoleBadge(t)}
+            ${currentRound ? `<span id="autosave-status-${currentRound.id}" class="${autosaveStatusClass(t.id, currentRound.id)}">${autosaveStatusLabel(t.id, currentRound.id)}</span>` : ''}
             <span style="font-size:0.85rem;color:var(--text-muted);">${formatDateTime(t.scheduledStartAt)}</span>
             ${t.isRanked ? '<span class="badge badge-gold">⭐ Rankeado</span>' : ''}
             <span style="font-size:0.85rem;color:var(--text-muted);">Ronda ${t.currentRound} / ${t.totalRounds}</span>
@@ -1394,7 +1633,7 @@ function renderOrgTables(t, round) {
           ${!isBench && !finished && (round.status === 'active' || round.status === 'pending') ? `
             <div class="score-control">
               <button class="score-btn" onclick="adjustScore('${t.id}','${round.id}','${table.id}','${p.userId}',-1)">−</button>
-              <input type="number" class="score-input" value="${p.score||0}" min="0"
+              <input type="number" class="score-input" value="${p.score||0}" min="0" data-user-id="${escHtml(p.userId)}"
                      onchange="setScore('${t.id}','${round.id}','${table.id}','${p.userId}',this.value)" />
               <button class="score-btn" onclick="adjustScore('${t.id}','${round.id}','${table.id}','${p.userId}',1)">+</button>
             </div>
@@ -1521,22 +1760,29 @@ async function onDropToZone(event, tid, rid, targetTableId) {
 }
 
 async function _persistTables(tid, rid, round) {
-  try {
-    const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables', {
-      method: 'PUT',
-      body: { tables: round.tables },
-    });
-    _updateTournamentCache(t);
-    // Re-renderizar solo las mesas sin perder timers
-    const container = document.getElementById('org-tables-container');
-    if (container) {
-      const updatedRound = t.rounds.find(r => r.id === rid);
-      if (updatedRound) container.innerHTML = renderOrgTables(t, updatedRound);
-    }
-  } catch(e) {
-    toast('Error al guardar mesas: ' + e.message, 'error');
-    refreshTournament();
-  }
+  const t = App.tournaments.find(tt => tt.id === tid);
+  if (!t || !round) return;
+  queueRoundChange(tid, rid, { type: 'tables', tables: round.tables });
+  renderRoundTablesFromCache(tid, rid);
+}
+
+function renderRoundTablesFromCache(tid, rid) {
+  const t = App.tournaments.find(tt => tt.id === tid);
+  const round = t?.rounds.find(r => r.id === rid);
+  const container = document.getElementById('org-tables-container');
+  if (container && t && round) container.innerHTML = renderOrgTables(t, round);
+}
+
+function updateTableScoreInputs(tableId, userId, score) {
+  document.querySelectorAll('#pod-' + tableId + ' .score-input').forEach(input => {
+    if (input.dataset.userId === userId) input.value = score;
+  });
+}
+
+function updateGlobalScoreDisplays(userId, score) {
+  document.querySelectorAll('[id]').forEach(el => {
+    if (el.id === 'gs-' + userId) el.textContent = score;
+  });
 }
 
 // ─── SCORE MANAGEMENT ────────────────────────────────────────
@@ -1554,23 +1800,20 @@ async function setScore(tid, rid, tableId, userId, val) {
 }
 
 async function setScoreAPI(tid, rid, tableId, userId, score) {
-  try {
-    const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables/' + tableId + '/players/' + userId, { method: 'PATCH', body: { score } });
-    _updateTournamentCache(t);
-    // Actualizar el input en DOM directamente para no re-renderizar todo
-    const round = t.rounds.find(r => r.id === rid);
-    const table = round?.tables.find(tb => tb.id === tableId);
-    const player = table?.players.find(p => p.userId === userId);
-    if (player) {
-      const inputs = document.querySelectorAll('#pod-' + tableId + ' .score-input');
-      inputs.forEach(inp => { if (inp.closest('.player-row')?.querySelector('[onclick*="' + userId + '"]')) inp.value = player.score; });
-    }
-    refreshStandingsCard(t);
-  } catch(e) { toast(e.message, 'error'); }
+  const t = App.tournaments.find(tt => tt.id === tid);
+  const round = t?.rounds.find(r => r.id === rid);
+  const table = round?.tables.find(tb => tb.id === tableId);
+  const player = table?.players.find(p => p.userId === userId);
+  if (!player) return;
+  const nextScore = Math.max(0, parseInt(score, 10) || 0);
+  player.score = nextScore;
+  updateTableScoreInputs(tableId, userId, nextScore);
+  queueRoundChange(tid, rid, { type: 'tablePlayer', tableId, userId, score: nextScore });
 }
 
 async function adjustTableScores(tid, rid, tableId, delta) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables/' + tableId + '/scores', { method: 'PATCH', body: { delta } });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -1579,6 +1822,7 @@ async function adjustTableScores(tid, rid, tableId, delta) {
 
 async function adjustRoundScores(tid, rid, delta) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/scores', { method: 'PATCH', body: { delta } });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -1586,11 +1830,15 @@ async function adjustRoundScores(tid, rid, delta) {
 }
 
 async function toggleEliminate(tid, rid, tableId, userId, eliminated) {
-  try {
-    const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/tables/' + tableId + '/players/' + userId, { method: 'PATCH', body: { eliminated } });
-    _updateTournamentCache(t); renderOrganizerView(t);
-    toast(eliminated ? 'Jugador eliminado de la mesa' : 'Jugador restaurado', 'info');
-  } catch(e) { toast(e.message, 'error'); }
+  const t = App.tournaments.find(tt => tt.id === tid);
+  const round = t?.rounds.find(r => r.id === rid);
+  const table = round?.tables.find(tb => tb.id === tableId);
+  const player = table?.players.find(p => p.userId === userId);
+  if (!player) return;
+  player.eliminated = !!eliminated;
+  queueRoundChange(tid, rid, { type: 'tablePlayer', tableId, userId, eliminated: !!eliminated });
+  renderRoundTablesFromCache(tid, rid);
+  toast(eliminated ? 'Jugador eliminado de la mesa' : 'Jugador restaurado', 'info');
 }
 
 // Global score adjustment desde standings
@@ -1599,11 +1847,16 @@ async function adjustGlobalScore(tid, userId, delta) {
   if (!t) return;
   const player = t.players.find(p => p.userId === userId);
   if (!player) return;
+  const openRound = (t.rounds || []).find(r => r.status === 'active' || r.status === 'pending');
   const newScore = Math.max(0, (player.score||0) + delta);
   // Optimistic update
   player.score = newScore;
-  const el = document.getElementById('gs-' + userId);
-  if (el) el.textContent = newScore;
+  updateGlobalScoreDisplays(userId, newScore);
+  refreshStandingsCard(t);
+  if (openRound) {
+    queueRoundChange(tid, openRound.id, { type: 'playerScore', userId, score: newScore });
+    return;
+  }
   try {
     const updated = await api('/api/tournaments/' + tid + '/players/' + userId + '/score', { method: 'PATCH', body: { score: newScore } });
     _updateTournamentCache(updated);
@@ -1682,6 +1935,7 @@ async function addModerator(tid) {
   const userId = extractProfileRef(input?.value);
   if (!userId) return toast('Ingresa un username o link de perfil', 'error');
   try {
+    await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/moderators', { method: 'POST', body: { userId } });
     _updateTournamentCache(t);
     if (App.currentView === 'lobby') renderLobby(t); else renderOrganizerView(t);
@@ -1691,6 +1945,7 @@ async function addModerator(tid) {
 
 async function removeModerator(tid, userId) {
   try {
+    await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/moderators/' + encodeURIComponent(userId), { method: 'DELETE' });
     _updateTournamentCache(t);
     if (App.currentView === 'lobby') renderLobby(t); else renderOrganizerView(t);
@@ -1735,6 +1990,7 @@ function hideOrgPlayerSearch() {
 
 async function addPlayerFromOrganizer(tid, userId) {
   try {
+    await flushAllPendingChanges(tid);
     let t = await api('/api/tournaments/' + tid + '/players', { method: 'POST', body: { userId } });
     const invited = !!t.invited;
     if (t.requested) t = await api('/api/tournaments/' + tid);
@@ -1749,6 +2005,7 @@ async function addAnonymousPlayerFromOrganizer(tid, name = null) {
   const anonymousName = (name || input?.value || '').trim();
   if (!anonymousName) { toast('Ingresa un nombre anonimo', 'error'); return; }
   try {
+    await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/players', { method: 'POST', body: { anonymousName } });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -1766,6 +2023,7 @@ async function addPlayerFromOrganizerProfileLink(tid) {
 
 async function toggleTournamentDisqualification(tid, userId, disqualified) {
   try {
+    await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/players/' + userId + '/status', { method: 'PATCH', body: { disqualified } });
     _updateTournamentCache(t);
     renderOrganizerView(t);
@@ -1775,6 +2033,7 @@ async function toggleTournamentDisqualification(tid, userId, disqualified) {
 // ─── FINISH TABLE MODAL ───────────────────────────────────────
 async function setPlayerCards(tid, userId, yellowCards, redCard) {
   try {
+    await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/players/' + userId + '/status', {
       method: 'PATCH',
       body: { yellowCards: Math.max(0, Math.min(2, parseInt(yellowCards, 10) || 0)), redCard: !!redCard },
@@ -1868,6 +2127,7 @@ async function doFinishTable() {
   else if (sel === 'draw') { result = 'draw'; drawUserIds = [...document.querySelectorAll('input[name="draw-p"]:checked')].map(cb => cb.value); }
 
   try {
+    await flushAllPendingChanges(tid, rid);
     const endpoint = '/api/tournaments/' + tid + '/rounds/' + rid + '/tables/' + tableId + (mode === 'revise' ? '/revise' : '/finish');
     const t = await api(endpoint, {
       method: 'POST', body: { players, result, winnerUserId, drawUserIds }
@@ -1965,6 +2225,7 @@ async function doFinishRound() {
       };
     });
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/finish', { method: 'POST', body: { tables } });
     _updateTournamentCache(t); closeModal(); stopAllTimers();
     toast('Ronda ' + round.number + ' finalizada', 'success');
@@ -1974,6 +2235,7 @@ async function doFinishRound() {
 
 async function activateRound(tid, rid) {
   try {
+    await flushAllPendingChanges(tid, rid);
     const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/activate', { method: 'POST' });
     _updateTournamentCache(t); toast('Ronda iniciada', 'success'); renderOrganizerView(t);
   } catch(e) { toast(e.message, 'error'); }
@@ -1981,6 +2243,7 @@ async function activateRound(tid, rid) {
 
 async function refreshTournament() {
   try {
+    if (App.currentTournamentId) await flushAllPendingChanges(App.currentTournamentId);
     const t = await api('/api/tournaments/' + App.currentTournamentId);
     _updateTournamentCache(t);
     const isOrg = isTournamentManager(t);
@@ -2692,6 +2955,7 @@ function _updateTournamentCache(t) {
 // Auto-refresh cada 30s cuando hay torneo abierto
 setInterval(() => {
   if (App.currentTournamentId && (App.currentView==='organizer'||App.currentView==='spectator')) {
+    if (App.currentView === 'organizer' && hasPendingRoundChanges(App.currentTournamentId)) return;
     refreshTournament();
   }
 }, 30000);

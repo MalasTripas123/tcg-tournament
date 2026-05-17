@@ -406,6 +406,51 @@ async function adjustRoundScores(tournamentId, organizerId, roundId, delta) {
   return save(tournament);
 }
 
+async function applyRoundChanges(tournamentId, organizerId, roundId, changes) {
+  const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
+  const round = findRound(tournament, roundId);
+  assertStatus(round, ['pending', 'active'], 'No se puede modificar una ronda finalizada');
+
+  const applied = [];
+  for (const change of changes) {
+    if (change.type === 'tables') {
+      assertTablesEditable(round, 'Las mesas estan bloqueadas durante la ronda activa');
+      ensureBench(round);
+      round.tables = validateAndRebuildTables(round.tables, change.tables, tournament.players);
+      applied.push({ type: 'tables', tableCount: round.tables.length });
+      continue;
+    }
+
+    if (change.type === 'tablePlayer') {
+      const table = findTable(round, change.tableId);
+      assertStatus(table, ['pending', 'active'], 'No se puede modificar una mesa finalizada');
+      const player = findTablePlayer(table, change.userId);
+      const detail = { type: 'tablePlayer', tableId: change.tableId, userId: change.userId };
+      if (change.score !== undefined) {
+        player.score = normalizeNonNegativeInt(change.score);
+        detail.score = player.score;
+      }
+      if (change.eliminated !== undefined) {
+        player.eliminated = !!change.eliminated;
+        detail.eliminated = player.eliminated;
+      }
+      applied.push(detail);
+      continue;
+    }
+
+    if (change.type === 'playerScore') {
+      const player = tournament.players.find(current => current.userId === change.userId);
+      if (!player) throw ApiError.notFound('Jugador no encontrado');
+      const before = player.score || 0;
+      setManualTotalScore(tournament, player, change.score);
+      applied.push({ type: 'playerScore', userId: change.userId, before, after: player.score });
+    }
+  }
+
+  recordAuditEvent(tournament, organizerId, 'round_changes_applied', { roundId, changes: applied });
+  return save(tournament);
+}
+
 async function activateRound(tournamentId, organizerId, roundId) {
   const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
   const round = findRound(tournament, roundId);
@@ -1262,6 +1307,7 @@ module.exports = {
   updateTablePlayer,
   adjustTableScores,
   adjustRoundScores,
+  applyRoundChanges,
   activateRound,
   pauseRound,
   resumeRound,
