@@ -130,6 +130,8 @@ const tournamentSchema = new mongoose.Schema({
   scheduledStartAt: { type: Number, default: null },
   totalRounds: { type: Number, required: true, min: 1 },
   roundDuration: { type: Number, required: true, min: 0 },
+  minPlayers: { type: Number, default: null, min: 2 },
+  maxPlayers: { type: Number, default: null, min: 2 },
   status: { type: String, enum: ['lobby', 'active', 'review', 'finished'], default: 'lobby' },
   visibility: { type: String, enum: ['public', 'approval', 'private'], default: 'public' },
   isRanked: { type: Boolean, default: false },

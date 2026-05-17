@@ -29,6 +29,11 @@ function asInt(value, field, min, max, fallback) {
   return parsed;
 }
 
+function optionalInt(value, field, min, max) {
+  if (value === undefined || value === null || value === '') return null;
+  return asInt(value, field, min, max);
+}
+
 function optionalTimestamp(value) {
   if (value === undefined || value === null || value === '') return null;
   const parsed = Number.isFinite(Number(value)) ? Number(value) : Date.parse(String(value));
@@ -79,6 +84,11 @@ function validatePrizes(prizes) {
 function validateCreateTournament(req) {
   const visibility = req.body.visibility || 'public';
   if (!VISIBILITY.has(visibility)) throw ApiError.badRequest('Visibilidad invalida');
+  const minPlayers = optionalInt(req.body.minPlayers, 'Minimo de jugadores', 2, 999);
+  const maxPlayers = optionalInt(req.body.maxPlayers, 'Maximo de jugadores', 2, 999);
+  if (minPlayers !== null && maxPlayers !== null && minPlayers > maxPlayers) {
+    throw ApiError.badRequest('El minimo no puede superar el maximo de jugadores');
+  }
 
   return {
     body: {
@@ -86,6 +96,8 @@ function validateCreateTournament(req) {
       scheduledStartAt: optionalTimestamp(req.body.scheduledStartAt),
       totalRounds: asInt(req.body.totalRounds, 'Rondas', 1, 20),
       roundDuration: asInt(req.body.roundDuration, 'Duracion', 0, 240, 50),
+      minPlayers,
+      maxPlayers,
       visibility,
       pairingMethod: PAIRING_METHODS.has(req.body.pairingMethod) ? req.body.pairingMethod : 'snake',
       tableMode: TABLE_MODES.has(req.body.tableMode) ? req.body.tableMode : 'multi',

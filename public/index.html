@@ -81,6 +81,18 @@
           </div>
         </div>
         <div style="margin-bottom:1.25rem;">
+          <label class="section-title">Limites de jugadores</label>
+          <label style="display:flex;align-items:center;gap:0.55rem;color:var(--text-muted);font-size:0.92rem;margin-bottom:0.65rem;">
+            <input id="t-has-player-limits" type="checkbox" onchange="togglePlayerLimitInputs(this.checked)" />
+            Definir minimo o maximo personalizado
+          </label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;" class="two-col">
+            <input id="t-min-players" class="input" type="number" min="2" max="999" placeholder="Minimo" disabled />
+            <input id="t-max-players" class="input" type="number" min="2" max="999" placeholder="Maximo" disabled />
+          </div>
+          <div style="font-size:0.78rem;color:var(--text-hint);margin-top:0.35rem;">Los torneos oficiales mantienen minimo 8 aunque dejes este campo vacio.</div>
+        </div>
+        <div style="margin-bottom:1.25rem;">
           <label class="section-title">Visibilidad</label>
           <select id="t-visibility" class="input">
             <option value="public">Público — Cualquiera puede inscribirse</option>

@@ -12,6 +12,7 @@ const App = {
   pendingRoundChanges: {},
   autosaveTimers: {},
   autosaveStatus: {},
+  standingsColumns: { cards: true, wins: true, draws: false, owp: false },
 };
 
 const AUTOSAVE_DELAY_MS = 750;
@@ -424,8 +425,8 @@ function tournamentHref(id) {
   return '/tournament/' + pathSegment(id);
 }
 
-function anonymousBadge(item) {
-  return item?.isAnonymous ? '<span class="badge badge-gray">Anonimo</span>' : '';
+function anonymousBadge(item, compact = false) {
+  return item?.isAnonymous ? `<span class="badge badge-gray ${compact ? 'badge-compact' : ''}">${compact ? 'Anon' : 'Anonimo'}</span>` : '';
 }
 
 function tableModeLabel(mode) {
@@ -463,6 +464,36 @@ function toggleStartDateInput(enabled) {
   if (!input) return;
   input.disabled = !enabled;
   if (!enabled) input.value = '';
+}
+
+function togglePlayerLimitInputs(enabled) {
+  const minInput = document.getElementById('t-min-players');
+  const maxInput = document.getElementById('t-max-players');
+  [minInput, maxInput].forEach(input => {
+    if (!input) return;
+    input.disabled = !enabled;
+    if (!enabled) input.value = '';
+  });
+}
+
+function tournamentVisibilityLabel(visibility) {
+  return ({
+    public: 'Publico',
+    approval: 'Con aprobacion',
+    private: 'Privado',
+  })[visibility || 'public'] || 'Publico';
+}
+
+function tournamentPlayerLimitText(t) {
+  const min = t.minimumPlayers || (t.isRanked ? 8 : 2);
+  const max = t.maxPlayers || null;
+  return `${(t.players || []).length} registrados - min. ${min}${max ? ` - max. ${max}` : ''}`;
+}
+
+function playerProfileLink(player, extraClass = '') {
+  if (player?.isAnonymous) return `<span class="${extraClass}">${escHtml(player.displayName)}</span>`;
+  const ref = player?.username || player?.profileSlug || player?.userId || player?.id;
+  return `<a class="${extraClass}" href="${profileHref(ref)}" onclick="profileLinkClick(event,'${jsAttr(ref)}')">${escHtml(player.displayName)}</a>`;
 }
 
 function renderPrize(p) {
@@ -680,6 +711,8 @@ function renderTournamentsList(list) {
       <a class="btn btn-outline" href="/create" onclick="createLinkClick(event)" style="margin-top:1rem;">Crear el primero</a>
     </div>`; return;
   }
+  c.innerHTML = list.map(renderTournamentHomeCard).join('');
+  return;
   const statusMap = { lobby:{l:'Lobby',b:'badge-gray'}, active:{l:'En curso',b:'badge-green'}, review:{l:'Revision',b:'badge-orange'}, finished:{l:'Finalizado',b:'badge-purple'} };
   const visMap = { public:'🌐', approval:'⏳', private:'🔒' };
   c.innerHTML = list.map(t => {
@@ -706,6 +739,30 @@ function renderTournamentsList(list) {
   }).join('');
 }
 
+function renderTournamentHomeCard(t) {
+  const statusMap = {
+    lobby: { label: 'Lobby', badge: 'badge-gray' },
+    active: { label: 'En curso', badge: 'badge-green' },
+    review: { label: 'Revision', badge: 'badge-orange' },
+    finished: { label: 'Finalizado', badge: 'badge-purple' },
+  };
+  const status = statusMap[t.status] || statusMap.lobby;
+  const isOrg = isTournamentManager(t);
+  return `<a class="card tournament-card" href="${tournamentHref(t.id)}" onclick="tournamentLinkClick(event,'${jsAttr(t.id)}')">
+    <div class="tournament-card-row tournament-card-tags">
+      ${t.isRanked ? '<span class="badge badge-gold">Rankeado</span>' : '<span class="badge badge-gray">Normal</span>'}
+      <span class="badge ${status.badge}">${status.label}</span>
+      ${isOrg ? '<span class="badge badge-purple">Tu torneo</span>' : ''}
+    </div>
+    <div class="tournament-card-row tournament-card-title">${escHtml(t.name)}</div>
+    <div class="tournament-card-row tournament-card-muted">Organizador: ${escHtml(t.organizerName || 'Sin organizador')}</div>
+    <div class="tournament-card-row tournament-card-muted">${formatDateTime(t.scheduledStartAt)}</div>
+    <div class="tournament-card-row">${tournamentPlayerLimitText(t)}</div>
+    <div class="tournament-card-row">Rondas: ${t.currentRound || 0}/${t.totalRounds} - ${durationLabel(t.roundDuration)}</div>
+    <div class="tournament-card-row tournament-card-visibility">${tournamentVisibilityLabel(t.visibility)}</div>
+  </a>`;
+}
+
 async function openTournament(id) {
   App.currentTournamentId = id;
   try {
@@ -725,6 +782,11 @@ function handleCreateTournament() {
   if (!App.currentUser) { toast('Debes iniciar sesión para crear un torneo', 'error'); showLoginModal(); return; }
   App.prizes = [];
   document.getElementById('prizes-list').innerHTML = '';
+  const limitsToggle = document.getElementById('t-has-player-limits');
+  if (limitsToggle) {
+    limitsToggle.checked = false;
+    togglePlayerLimitInputs(false);
+  }
   navigate('create', null);
 }
 
@@ -922,7 +984,14 @@ async function submitCreateTournament(e) {
   const pairingMethod = document.getElementById('t-pairing').value;
   const tableMode = document.getElementById('t-table-mode').value;
   const scheduledStartAt = document.getElementById('t-has-start')?.checked ? readDateTimeLocal('t-start') : null;
+  const hasPlayerLimits = document.getElementById('t-has-player-limits')?.checked;
+  const minPlayers = hasPlayerLimits ? (document.getElementById('t-min-players').value || null) : null;
+  const maxPlayers = hasPlayerLimits ? (document.getElementById('t-max-players').value || null) : null;
   if (!name) { toast('Ingresa el nombre del torneo', 'error'); return; }
+  if (minPlayers && maxPlayers && parseInt(minPlayers, 10) > parseInt(maxPlayers, 10)) {
+    toast('El minimo no puede superar el maximo de jugadores', 'error');
+    return;
+  }
   if (!validatePrizesBeforeSubmit()) return;
   const prizes = App.prizes.map(({ type, value, imageUrl, creditCount, creditValue, distribution }) => ({
     type,
@@ -933,7 +1002,7 @@ async function submitCreateTournament(e) {
     distribution,
   }));
   try {
-    const t = await api('/api/tournaments', { method: 'POST', body: { name, scheduledStartAt, totalRounds, roundDuration, prizes, visibility, pairingMethod, tableMode } });
+    const t = await api('/api/tournaments', { method: 'POST', body: { name, scheduledStartAt, totalRounds, roundDuration, minPlayers, maxPlayers, prizes, visibility, pairingMethod, tableMode } });
     App.tournaments.unshift(t);
     toast('Torneo "' + t.name + '" creado', 'success');
     renderLobby(t); navigate('lobby', t.id);
@@ -954,7 +1023,7 @@ function renderLobby(t) {
           <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;font-size:0.85rem;color:var(--text-muted);">
             <span>🔄 ${t.totalRounds} rondas · ${durationLabel(t.roundDuration)}</span>
             <span>${visLabel[t.visibility] || '🌐 Público'}</span>
-            <span>Min. ${t.minimumPlayers || (t.isRanked ? 8 : 2)} jugadores</span>
+            <span>${tournamentPlayerLimitText(t)}</span>
             <span>${pairingLabel[t.pairingMethod] || 'Snake'}</span>
             <span>${tableModeLabel(t.tableMode)}</span>
             <span>${formatDateTime(t.scheduledStartAt)}</span>
@@ -1522,7 +1591,7 @@ function renderOrganizerView(t) {
         </div>` : ''}
 
       <!-- GRID: MESAS + STANDINGS -->
-      <div style="display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:1.5rem;align-items:start;" class="two-col">
+      <div class="organizer-layout">
 
         <!-- MESAS -->
         <div>
@@ -1543,8 +1612,7 @@ function renderOrganizerView(t) {
         <!-- STANDINGS + PREMIOS -->
         <div style="display:flex;flex-direction:column;gap:1rem;">
           <div class="card" id="standings-card">
-            <span class="section-title">Tabla de Posiciones</span>
-            ${renderStandings(t.players, t.id, false, t.rounds)}
+            ${renderStandingsCard(t)}
           </div>
           <div class="card">
             <span class="section-title">Panel de Jugadores</span>
@@ -1601,8 +1669,11 @@ function renderOrgTables(t, round) {
           ${tablesEditable && !finished ? '<span style="font-size:0.72rem;color:var(--text-hint);letter-spacing:0.05em;">arrastra</span>' : ''}
           ${!isBench && !finished && round.status === 'active' && table.startTime ? `<span id="sw-${table.id}" class="stopwatch-display"></span>` : ''}
           ${!isBench && !finished && (round.status === 'active' || round.status === 'pending') ? `
-            <button class="btn btn-ghost btn-sm" onclick="adjustTableScores('${t.id}','${round.id}','${table.id}',-1)">Todos -1</button>
-            <button class="btn btn-ghost btn-sm" onclick="adjustTableScores('${t.id}','${round.id}','${table.id}',1)">Todos +1</button>` : ''}
+            ${renderBulkScoreControl(
+              `bulk-${round.id}-${table.id}`,
+              `adjustTableScores('${t.id}','${round.id}','${table.id}',-scoreDeltaValue('bulk-${round.id}-${table.id}'))`,
+              `adjustTableScores('${t.id}','${round.id}','${table.id}',scoreDeltaValue('bulk-${round.id}-${table.id}'))`
+            )}` : ''}
           ${!isBench && !finished && round.status === 'active' ? `
             <button class="btn btn-outline btn-sm" onclick="openFinishTableModal('${t.id}','${round.id}','${table.id}')">
               Terminar Mesa
@@ -1633,7 +1704,7 @@ function renderOrgTables(t, round) {
           ${!isBench && !finished && (round.status === 'active' || round.status === 'pending') ? `
             <div class="score-control">
               <button class="score-btn" onclick="adjustScore('${t.id}','${round.id}','${table.id}','${p.userId}',-1)">−</button>
-              <input type="number" class="score-input" value="${p.score||0}" min="0" data-user-id="${escHtml(p.userId)}"
+              <input type="number" class="score-input" value="${p.score||0}" min="0" data-score-table-id="${escHtml(table.id)}" data-user-id="${escHtml(p.userId)}"
                      onchange="setScore('${t.id}','${round.id}','${table.id}','${p.userId}',this.value)" />
               <button class="score-btn" onclick="adjustScore('${t.id}','${round.id}','${table.id}','${p.userId}',1)">+</button>
             </div>
@@ -1774,8 +1845,8 @@ function renderRoundTablesFromCache(tid, rid) {
 }
 
 function updateTableScoreInputs(tableId, userId, score) {
-  document.querySelectorAll('#pod-' + tableId + ' .score-input').forEach(input => {
-    if (input.dataset.userId === userId) input.value = score;
+  document.querySelectorAll('.score-input').forEach(input => {
+    if (input.dataset.scoreTableId === tableId && input.dataset.userId === userId) input.value = score;
   });
 }
 
@@ -1783,6 +1854,24 @@ function updateGlobalScoreDisplays(userId, score) {
   document.querySelectorAll('[id]').forEach(el => {
     if (el.id === 'gs-' + userId) el.textContent = score;
   });
+  document.querySelectorAll('[data-global-user-id]').forEach(el => {
+    if (el.dataset.globalUserId !== userId) return;
+    if ('value' in el) el.value = score;
+    else el.textContent = score;
+  });
+}
+
+function renderBulkScoreControl(inputId, minusAction, plusAction) {
+  return `<div class="bulk-score-control">
+    <button class="score-btn" onclick="${minusAction}">-</button>
+    <input id="${inputId}" class="score-input" type="number" min="1" max="99" value="1" />
+    <button class="score-btn" onclick="${plusAction}">+</button>
+  </div>`;
+}
+
+function scoreDeltaValue(inputId) {
+  const value = parseInt(document.getElementById(inputId)?.value, 10);
+  return Math.max(1, Number.isFinite(value) ? value : 1);
 }
 
 // ─── SCORE MANAGEMENT ────────────────────────────────────────
@@ -1847,8 +1936,16 @@ async function adjustGlobalScore(tid, userId, delta) {
   if (!t) return;
   const player = t.players.find(p => p.userId === userId);
   if (!player) return;
+  await setGlobalScore(tid, userId, Math.max(0, (player.score||0) + delta));
+}
+
+async function setGlobalScore(tid, userId, score) {
+  const t = App.tournaments.find(tt => tt.id === tid);
+  if (!t) return;
+  const player = t.players.find(p => p.userId === userId);
+  if (!player) return;
   const openRound = (t.rounds || []).find(r => r.status === 'active' || r.status === 'pending');
-  const newScore = Math.max(0, (player.score||0) + delta);
+  const newScore = Math.max(0, parseInt(score, 10) || 0);
   // Optimistic update
   player.score = newScore;
   updateGlobalScoreDisplays(userId, newScore);
@@ -1865,10 +1962,11 @@ async function adjustGlobalScore(tid, userId, delta) {
 
 function refreshStandingsCard(t) {
   const card = document.getElementById('standings-card');
-  if (card) card.innerHTML = '<span class="section-title">Tabla de Posiciones</span>' + renderStandings(t.players, t.id, false, t.rounds);
+  if (card) card.innerHTML = renderStandingsCard(t);
 }
 
 function renderPlayerControlPanel(t) {
+  return renderPlayerControlPanelV2(t);
   const openRound = (t.rounds || []).find(r => r.status === 'active' || r.status === 'pending');
   const playerRows = !t.players.length ? '<p style="color:var(--text-hint);font-size:0.9rem;">Sin jugadores.</p>' : `
     ${t.players.map(p => `
@@ -1911,6 +2009,110 @@ function renderPlayerControlPanel(t) {
       <button class="btn btn-outline btn-sm" onclick="addAnonymousPlayerFromOrganizer('${t.id}')">Agregar anonimo</button>
     </div>
     <div style="display:flex;flex-direction:column;gap:0.5rem;">${playerRows}</div>
+  </div>`;
+}
+
+function openRoundForPlayerPanel(t) {
+  return (t.rounds || []).find(r => r.status === 'active' || r.status === 'pending');
+}
+
+function findRoundSeat(round, userId) {
+  if (!round) return null;
+  for (const table of round.tables || []) {
+    const player = (table.players || []).find(p => p.userId === userId);
+    if (player) return { table, player };
+  }
+  return null;
+}
+
+function renderPlayerPanelScoreControl(t, round, player) {
+  const seat = findRoundSeat(round, player.userId);
+  if (!seat || seat.table.type === 'bench') {
+    return `<span class="badge badge-gray">${seat ? 'Banca' : 'Sin mesa'}</span>`;
+  }
+  const inputId = `panel-score-${seat.table.id}-${player.userId}`;
+  return `<div class="score-control compact-score">
+    <button class="score-btn" onclick="adjustScore('${t.id}','${round.id}','${seat.table.id}','${player.userId}',-1)">-</button>
+    <input id="${inputId}" class="score-input" type="number" min="0" value="${seat.player.score || 0}" data-score-table-id="${escHtml(seat.table.id)}" data-user-id="${escHtml(player.userId)}"
+      onchange="setScore('${t.id}','${round.id}','${seat.table.id}','${player.userId}',this.value)" />
+    <button class="score-btn" onclick="adjustScore('${t.id}','${round.id}','${seat.table.id}','${player.userId}',1)">+</button>
+  </div>`;
+}
+
+function renderPlayerPanelTotalScoreControl(t, player) {
+  return `<div class="score-control compact-score">
+    <button class="score-btn" onclick="adjustGlobalScore('${t.id}','${player.userId}',-1)">-</button>
+    <input class="score-input" type="number" min="0" value="${player.score || 0}" data-global-user-id="${escHtml(player.userId)}"
+      onchange="setGlobalScore('${t.id}','${player.userId}',this.value)" />
+    <button class="score-btn" onclick="adjustGlobalScore('${t.id}','${player.userId}',1)">+</button>
+  </div>`;
+}
+
+function renderPlayerControlPanelV2(t) {
+  const openRound = openRoundForPlayerPanel(t);
+  const bulkId = openRound ? `bulk-round-${openRound.id}` : '';
+  const playerRows = !t.players.length ? '<p style="color:var(--text-hint);font-size:0.9rem;">Sin jugadores.</p>' : t.players.map(p => `
+    <div class="card-elevated player-panel-card ${p.eliminatedFromTournament ? 'disqualified' : ''}">
+      <div class="player-panel-row">
+        <div style="display:flex;align-items:center;gap:0.6rem;min-width:0;">
+          <div class="player-avatar" style="width:28px;height:28px;font-size:0.6rem;">${initials(p.displayName)}</div>
+          ${playerProfileLink(p, 'player-panel-name')}
+          ${anonymousBadge(p)}
+        </div>
+      </div>
+      <div class="player-panel-score-row">
+        <div class="player-panel-score-block">
+          <span class="player-panel-score-label">Ronda</span>
+          ${openRound ? renderPlayerPanelScoreControl(t, openRound, p) : '<span class="badge badge-gray">Sin ronda</span>'}
+        </div>
+        <div class="player-panel-score-block">
+          <span class="player-panel-score-label">Total</span>
+          ${renderPlayerPanelTotalScoreControl(t, p)}
+        </div>
+      </div>
+      <div class="player-panel-row">
+        <span style="font-size:0.78rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;">Tarjetas</span>
+        <div class="discipline-control">
+          ${cardBoxes(p)}
+          <button class="score-btn" title="Quitar amarilla" onclick="removeYellowCard('${t.id}','${p.userId}',${p.yellowCards||0},${!!p.redCard})">-</button>
+          <button class="score-btn" title="Agregar amarilla" onclick="addYellowCard('${t.id}','${p.userId}',${p.yellowCards||0},${!!p.redCard})">+</button>
+          <button class="btn btn-sm ${p.redCard?'btn-danger':'btn-ghost'}" onclick="setPlayerCards('${t.id}','${p.userId}',${p.redCard ? 0 : 2},${!p.redCard})">Roja</button>
+        </div>
+      </div>
+      <div class="player-panel-row">
+        <button class="btn btn-sm ${p.eliminatedFromTournament?'btn-ghost':'btn-danger'}" onclick="toggleTournamentDisqualification('${t.id}','${p.userId}',${!p.eliminatedFromTournament})">
+          ${p.eliminatedFromTournament ? 'Reintegrar' : 'Descalificar'}
+        </button>
+      </div>
+    </div>`).join('');
+
+  return `<div style="display:flex;flex-direction:column;gap:0.75rem;">
+    ${openRound ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:0.65rem;flex-wrap:wrap;">
+      <span style="font-size:0.82rem;color:var(--text-muted);">Todos los jugadores de la ronda</span>
+      ${renderBulkScoreControl(
+        bulkId,
+        `adjustRoundScores('${t.id}','${openRound.id}',-scoreDeltaValue('${bulkId}'))`,
+        `adjustRoundScores('${t.id}','${openRound.id}',scoreDeltaValue('${bulkId}'))`
+      )}
+    </div>` : ''}
+    <div style="display:flex;flex-direction:column;gap:0.65rem;">${playerRows}</div>
+    <details class="player-invite-details">
+      <summary>Invitar o agregar jugadores</summary>
+      <div style="display:flex;flex-direction:column;gap:0.65rem;margin-top:0.75rem;">
+        <div style="position:relative;">
+          <input id="org-player-search" class="input" placeholder="Invitar o agregar jugador..." oninput="handleOrgPlayerSearch('${t.id}',this.value)" onblur="setTimeout(()=>hideOrgPlayerSearch(),200)" />
+          <div id="org-player-search-dropdown" class="search-dropdown" style="display:none;"></div>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <input id="org-player-profile-link" class="input" style="flex:1;min-width:180px;" placeholder="Pegar link de perfil o username..." />
+          <button class="btn btn-outline btn-sm" onclick="addPlayerFromOrganizerProfileLink('${t.id}')">Invitar por link</button>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <input id="org-anonymous-player-name" class="input" style="flex:1;min-width:180px;" placeholder="Nombre de jugador anonimo..." />
+          <button class="btn btn-outline btn-sm" onclick="addAnonymousPlayerFromOrganizer('${t.id}')">Agregar anonimo</button>
+        </div>
+      </div>
+    </details>
   </div>`;
 }
 
@@ -2492,7 +2694,36 @@ function calcOWP(player, allPlayers, rounds) {
   return rates.reduce((s, r) => s + r, 0) / rates.length;
 }
 
+function renderStandingsCard(t) {
+  return `<span class="section-title">Tabla de Posiciones</span>
+    ${renderStandingsControls(t.id)}
+    ${renderStandings(t.players, t.id, false, t.rounds)}`;
+}
+
+function renderStandingsControls(tid) {
+  const columns = App.standingsColumns;
+  const options = [
+    ['cards', 'Tarjetas'],
+    ['wins', 'Victorias'],
+    ['draws', 'Empates'],
+    ['owp', 'OW%'],
+  ];
+  return `<div class="standings-controls">
+    ${options.map(([key, label]) => `<label class="standings-toggle">
+      <input type="checkbox" ${columns[key] ? 'checked' : ''} onchange="toggleStandingsColumn('${tid}','${key}',this.checked)" />
+      ${label}
+    </label>`).join('')}
+  </div>`;
+}
+
+function toggleStandingsColumn(tid, key, visible) {
+  App.standingsColumns[key] = !!visible;
+  const t = App.tournaments.find(tt => tt.id === tid);
+  if (t) refreshStandingsCard(t);
+}
+
 function renderStandings(players, tid, editable, rounds) {
+  return renderStandingsV2(players, tid, editable, rounds);
   if (!players.length) return '<p style="color:var(--text-hint);text-align:center;padding:1rem 0;font-size:0.9rem;">Sin jugadores.</p>';
   rounds = rounds || [];
 
@@ -2538,7 +2769,7 @@ function renderStandings(players, tid, editable, rounds) {
             ${editable ? `
               <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.15rem;">
                 <button class="score-btn" style="width:16px;height:16px;font-size:0.75rem;border-radius:3px;" onclick="adjustGlobalScore('${tid}','${p.userId}',-1)">−</button>
-                <span id="gs-${p.userId}" style="font-family:'Cinzel',serif;font-weight:700;font-size:0.88rem;min-width:1.5rem;text-align:center;">${p.score||0}</span>
+                <span id="gs-${p.userId}" data-global-user-id="${escHtml(p.userId)}" style="font-family:'Cinzel',serif;font-weight:700;font-size:0.88rem;min-width:1.5rem;text-align:center;">${p.score||0}</span>
                 <button class="score-btn" style="width:16px;height:16px;font-size:0.75rem;border-radius:3px;" onclick="adjustGlobalScore('${tid}','${p.userId}',1)">+</button>
               </div>` :
               `<span style="font-family:'Cinzel',serif;font-weight:700;font-size:0.88rem;">${p.score||0}</span>`}
@@ -2547,6 +2778,58 @@ function renderStandings(players, tid, editable, rounds) {
           <td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.wins||0}</td>
           <td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.draws||0}</td>
           <td style="text-align:right;font-size:0.78rem;color:var(--text-hint);" title="OW%: ${fmtOwp(p.owp)}">${fmtOwp(p.owp)}</td>
+        </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function renderStandingsV2(players, tid, editable, rounds) {
+  if (!players.length) return '<p style="color:var(--text-hint);text-align:center;padding:1rem 0;font-size:0.9rem;">Sin jugadores.</p>';
+  rounds = rounds || [];
+  const columns = App.standingsColumns;
+  const withOwp = players.map(p => ({ ...p, owp: calcOWP(p, players, rounds) }));
+  const sorted = withOwp.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if ((b.wins || 0) !== (a.wins || 0)) return (b.wins || 0) - (a.wins || 0);
+    if (b.owp !== null && a.owp !== null) return b.owp - a.owp;
+    return 0;
+  });
+  const places = ['1', '2', '3'];
+  const fmtOwp = value => value === null ? '-' : (value * 100).toFixed(1) + '%';
+  return `<table class="standings-table">
+    <thead><tr>
+      <th style="width:1.8rem;">#</th>
+      <th>Jugador</th>
+      <th style="text-align:right;" title="Puntos totales">Pts</th>
+      ${columns.cards ? '<th style="text-align:right;" title="Tarjetas">Tarj.</th>' : ''}
+      ${columns.wins ? '<th style="text-align:right;" title="Victorias">V</th>' : ''}
+      ${columns.draws ? '<th style="text-align:right;" title="Empates">E</th>' : ''}
+      ${columns.owp ? '<th style="text-align:right;" title="Opponent Win Percentage">OW%</th>' : ''}
+    </tr></thead>
+    <tbody>
+      ${sorted.map((p, i) => `
+        <tr class="${i < 3 ? 'rank-' + (i + 1) : ''}">
+          <td style="font-family:'Cinzel',serif;font-size:0.82rem;">${places[i] || i + 1}</td>
+          <td style="max-width:170px;">
+            <div style="display:flex;align-items:center;gap:0.4rem;min-width:0;">
+              <div class="player-avatar" style="width:20px;height:20px;font-size:0.5rem;flex-shrink:0;">${initials(p.displayName)}</div>
+              ${playerProfileLink(p, 'standings-player-link')}
+              ${anonymousBadge(p, true)}
+            </div>
+          </td>
+          <td style="text-align:right;">
+            ${editable ? `
+              <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.15rem;">
+                <button class="score-btn" style="width:16px;height:16px;font-size:0.75rem;border-radius:3px;" onclick="adjustGlobalScore('${tid}','${p.userId}',-1)">-</button>
+                <span id="gs-${p.userId}" data-global-user-id="${escHtml(p.userId)}" style="font-family:'Cinzel',serif;font-weight:700;font-size:0.88rem;min-width:1.5rem;text-align:center;">${p.score||0}</span>
+                <button class="score-btn" style="width:16px;height:16px;font-size:0.75rem;border-radius:3px;" onclick="adjustGlobalScore('${tid}','${p.userId}',1)">+</button>
+              </div>` :
+              `<span style="font-family:'Cinzel',serif;font-weight:700;font-size:0.88rem;">${p.score||0}</span>`}
+          </td>
+          ${columns.cards ? `<td style="text-align:right;">${cardBoxes(p)}${p.eliminatedFromTournament ? '<span class="badge badge-red badge-compact">DQ</span>' : ''}</td>` : ''}
+          ${columns.wins ? `<td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.wins||0}</td>` : ''}
+          ${columns.draws ? `<td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.draws||0}</td>` : ''}
+          ${columns.owp ? `<td style="text-align:right;font-size:0.78rem;color:var(--text-hint);" title="OW%: ${fmtOwp(p.owp)}">${fmtOwp(p.owp)}</td>` : ''}
         </tr>`).join('')}
     </tbody>
   </table>`;

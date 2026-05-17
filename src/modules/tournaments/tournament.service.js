@@ -39,6 +39,11 @@ async function getTournament(id, viewerId) {
 async function createTournament(data, organizerId) {
   const organizer = await userRepository.findByUid(organizerId);
   if (!organizer) throw ApiError.notFound('Organizador no encontrado');
+  const isRanked = !!(organizer.isLicensed && organizer.role === 'organizer');
+  const effectiveMinimum = Math.max(isRanked ? 8 : 2, Number.isFinite(Number(data.minPlayers)) ? Number(data.minPlayers) : 0);
+  if (data.maxPlayers !== null && data.maxPlayers !== undefined && data.maxPlayers < effectiveMinimum) {
+    throw ApiError.badRequest(`El maximo debe ser al menos ${effectiveMinimum} jugadores`);
+  }
 
   return tournamentRepository.createTournament({
     name: data.name,
@@ -48,9 +53,11 @@ async function createTournament(data, organizerId) {
     scheduledStartAt: data.scheduledStartAt || null,
     totalRounds: data.totalRounds,
     roundDuration: data.roundDuration,
+    minPlayers: data.minPlayers,
+    maxPlayers: data.maxPlayers,
     status: 'lobby',
     visibility: data.visibility || 'public',
-    isRanked: !!(organizer.isLicensed && organizer.role === 'organizer'),
+    isRanked,
     pairingMethod: data.pairingMethod || 'snake',
     tableMode: data.tableMode || 'multi',
     rankingApplied: false,
@@ -698,6 +705,10 @@ async function setTournamentPlayerStatus(tournamentId, organizerId, userId, data
   if (data.yellowCards !== undefined || data.redCard !== undefined) {
     const before = { yellowCards: player.yellowCards || 0, redCard: !!player.redCard };
     setPlayerCards(tournament, player, data);
+    if (player.redCard && !player.eliminatedFromTournament) {
+      disqualifyPlayer(tournament, player);
+      recordAuditEvent(tournament, organizerId, 'player_disqualified_by_red_card', { userId, displayName: player.displayName });
+    }
     recordAuditEvent(tournament, organizerId, 'player_cards_updated', {
       userId,
       displayName: player.displayName,
@@ -865,6 +876,7 @@ function createInvitation(tournament, user, organizerId) {
 }
 
 function addPlayerToTournament(tournament, user) {
+  assertPlayerLimitAvailable(tournament);
   const player = playerEntry(user);
   tournament.players.push(player);
   if (tournament.status === 'active') {
@@ -887,13 +899,29 @@ function addPlayerToTournament(tournament, user) {
 }
 
 function minimumPlayersForTournament(tournament) {
-  return tournament.isRanked ? 8 : 2;
+  const baseMinimum = tournament.isRanked ? 8 : 2;
+  const customMinimum = parseInt(tournament.minPlayers, 10);
+  return Math.max(baseMinimum, Number.isFinite(customMinimum) ? customMinimum : 0);
+}
+
+function maximumPlayersForTournament(tournament) {
+  const parsed = parseInt(tournament.maxPlayers, 10);
+  return Number.isFinite(parsed) && parsed >= 2 ? parsed : null;
+}
+
+function assertPlayerLimitAvailable(tournament) {
+  const maximum = maximumPlayersForTournament(tournament);
+  if (maximum !== null && tournament.players.length >= maximum) {
+    throw ApiError.badRequest(`El torneo ya alcanzo el maximo de ${maximum} jugadores`);
+  }
 }
 
 function normalizeTournament(tournament) {
   tournament.pairingMethod = tournament.pairingMethod || 'snake';
   tournament.tableMode = tournament.tableMode || 'multi';
   tournament.roundDuration = normalizeRoundDuration(tournament.roundDuration);
+  tournament.minPlayers = tournament.minPlayers ?? null;
+  tournament.maxPlayers = tournament.maxPlayers ?? null;
   tournament.joinRequests = tournament.joinRequests || [];
   tournament.rounds = tournament.rounds || [];
   tournament.players = tournament.players || [];
