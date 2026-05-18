@@ -37,8 +37,22 @@ async function getCurrentUser(userId) {
   return userRepository.findByUid(userId);
 }
 
+async function verifyPassword(userId, password) {
+  const user = await userRepository.findByUid(userId);
+  const passwordValid = user
+    ? await bcrypt.compare(password || '', user.password)
+    : await bcrypt.compare(password || '', DUMMY_HASH);
+
+  if (!user || !passwordValid) {
+    throw ApiError.unauthorized('Clave incorrecta');
+  }
+
+  return user;
+}
+
 module.exports = {
   login,
   register,
   getCurrentUser,
+  verifyPassword,
 };

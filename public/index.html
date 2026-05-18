@@ -42,11 +42,31 @@
       <a class="btn btn-primary btn-lg" href="/create" onclick="createLinkClick(event)">♦ Crear Torneo</a>
     </div>
     <div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:0.75rem;">
-        <span class="section-title" style="margin:0;border:none;padding:0;">Torneos Públicos</span>
-        <input id="home-filter" class="input" placeholder="Filtrar..." style="width:200px;padding:0.4rem 0.8rem;font-size:0.85rem;" oninput="filterTournaments(this.value)" />
+      <div class="home-toolbar">
+        <div>
+          <span class="section-title" style="margin:0;border:none;padding:0;">Torneos</span>
+          <div class="home-toolbar-note">Solo torneos publicos o con aprobacion.</div>
+        </div>
+        <div class="home-filters">
+          <input id="home-filter-name" class="input home-filter-input" placeholder="Filtrar por torneo u organizador..." oninput="updateHomeFilter('name', this.value)" />
+          <select id="home-filter-visibility" class="input home-filter-select" onchange="updateHomeFilter('visibility', this.value)">
+            <option value="">Publico y aprobacion</option>
+            <option value="public">Publicos</option>
+            <option value="approval">Por aprobacion</option>
+          </select>
+          <select id="home-sort" class="input home-filter-select" onchange="updateHomeFilter('sort', this.value)">
+            <option value="created-desc">Creacion: recientes</option>
+            <option value="created-asc">Creacion: antiguos</option>
+            <option value="scheduled-asc">Realizacion: proximos</option>
+            <option value="scheduled-desc">Realizacion: recientes</option>
+          </select>
+          <label class="home-ranked-toggle">
+            <input id="home-filter-ranked" type="checkbox" onchange="updateHomeFilter('ranked', this.checked)" />
+            Solo rankeados
+          </label>
+        </div>
       </div>
-      <div id="tournaments-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:1rem;"></div>
+      <div id="tournaments-list" class="home-sections"></div>
     </div>
   </div>
 

@@ -17,6 +17,7 @@ router.delete('/:id/moderators/:userId', requireAuth, asyncHandler(controller.re
 
 router.post('/:id/players', requireAuth, validateRequest(validators.validateAddPlayer), asyncHandler(controller.addPlayer));
 router.delete('/:id/players/:userId', requireAuth, asyncHandler(controller.removePlayer));
+router.patch('/:id/players/scores', requireAuth, validateRequest(validators.validateScoreDelta), asyncHandler(controller.adjustTournamentScores));
 router.patch('/:id/players/:userId/score', requireAuth, validateRequest(validators.validatePatchScore), asyncHandler(controller.setPlayerScore));
 router.post('/:id/players/:userId/appeal', requireAuth, validateRequest(validators.validateAppeal), asyncHandler(controller.appealPlayerDiscipline));
 
@@ -25,6 +26,9 @@ router.patch('/:id/invitations/me', requireAuth, validateRequest(validators.vali
 
 router.post('/:id/start', requireAuth, asyncHandler(controller.start));
 router.patch('/:id/settings', requireAuth, validateRequest(validators.validateTournamentSettings), asyncHandler(controller.updateSettings));
+router.delete('/:id', requireAuth, validateRequest(validators.validateDeleteTournament), asyncHandler(controller.deleteTournament));
+router.post('/:id/rounds', requireAuth, asyncHandler(controller.addRound));
+router.delete('/:id/rounds', requireAuth, asyncHandler(controller.removeRound));
 
 router.put('/:id/rounds/:roundId/tables', requireAuth, validateRequest(validators.validateReplaceTables), asyncHandler(controller.replaceTables));
 router.post('/:id/rounds/:roundId/tables', requireAuth, asyncHandler(controller.addTable));

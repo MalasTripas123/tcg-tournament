@@ -3,13 +3,13 @@ const { createId } = require('../../shared/utils/ids');
 
 async function findAll() {
   const order = { active: 0, lobby: 1, finished: 2 };
-  const tournaments = await Tournament.find().lean();
+  const tournaments = await Tournament.find({ deletedAt: null }).lean();
   return tournaments.sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3));
 }
 
 async function findById(id) {
   if (!id) return null;
-  return Tournament.findById(id).lean();
+  return Tournament.findOne({ _id: id, deletedAt: null }).lean();
 }
 
 async function createTournament(data) {

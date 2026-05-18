@@ -12,7 +12,10 @@ const App = {
   pendingRoundChanges: {},
   autosaveTimers: {},
   autosaveStatus: {},
-  standingsColumns: { cards: true, wins: true, draws: false, owp: false },
+  standingsColumns: { cards: false, wins: true, draws: false, owp: true },
+  homeFilters: { name: '', visibility: '', ranked: false, sort: 'created-desc' },
+  homeFinishedExpanded: false,
+  currentProfileUser: null,
 };
 
 const AUTOSAVE_DELAY_MS = 750;
@@ -459,8 +462,23 @@ function readDateTimeLocal(id) {
   return Number.isFinite(time) ? time : null;
 }
 
+function dateTimeLocalValue(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
 function toggleStartDateInput(enabled) {
   const input = document.getElementById('t-start');
+  if (!input) return;
+  input.disabled = !enabled;
+  if (!enabled) input.value = '';
+}
+
+function toggleTournamentStartDateInput(enabled) {
+  const input = document.getElementById('tournament-settings-start');
   if (!input) return;
   input.disabled = !enabled;
   if (!enabled) input.value = '';
@@ -496,16 +514,15 @@ function renderTournamentBanner(t, extraClass = '') {
   return renderImageBanner(t?.bannerUrl, `tournament-banner ${extraClass}`.trim(), t?.name || 'Banner del torneo');
 }
 
-function renderProfileBanner(user) {
-  return renderImageBanner(user?.bannerUrl, 'profile-banner', user?.displayName || 'Banner del perfil');
+function renderTournamentCardBanner(t) {
+  const cleanUrl = String(t?.bannerUrl || '').trim();
+  return `<div class="tournament-banner tournament-card-banner ${cleanUrl ? '' : 'is-empty'}">
+    ${cleanUrl ? `<img src="${escHtml(cleanUrl)}" alt="${escHtml(t?.name || 'Banner del torneo')}" loading="lazy" onerror="this.style.display='none'" />` : ''}
+  </div>`;
 }
 
-function renderTournamentBannerControl(t) {
-  if (!isTournamentManager(t) || t.status === 'finished') return '';
-  return `<div class="banner-url-control">
-    <input id="tournament-banner-url" class="input" type="url" value="${escHtml(t.bannerUrl || '')}" placeholder="URL de banner del torneo" />
-    <button class="btn btn-outline btn-sm" onclick="updateTournamentBanner('${jsAttr(t.id)}')">Guardar banner</button>
-  </div>`;
+function renderProfileBanner(user) {
+  return renderImageBanner(user?.bannerUrl, 'profile-banner', user?.displayName || 'Banner del perfil');
 }
 
 function tournamentPlayerLimitText(t) {
@@ -648,10 +665,11 @@ function toast(msg, type = 'info') {
 // ═══════════════════════════════════════════════════════════════
 // MODAL
 // ═══════════════════════════════════════════════════════════════
-function showModal(html) {
+function showModal(html, className = '') {
+  const modalClass = ['modal', className].filter(Boolean).join(' ');
   document.getElementById('modal-container').innerHTML = `
     <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
-      <div class="modal" onclick="event.stopPropagation()">${html}</div>
+      <div class="${modalClass}" onclick="event.stopPropagation()">${html}</div>
     </div>`;
 }
 function closeModal() { document.getElementById('modal-container').innerHTML = ''; }
@@ -722,11 +740,7 @@ async function loadTournaments() {
   try { App.tournaments = await api('/api/tournaments'); renderTournamentsList(App.tournaments); } catch(e) { console.error(e); }
 }
 
-function filterTournaments(q) {
-  renderTournamentsList(App.tournaments.filter(t => t.name.toLowerCase().includes(q.toLowerCase())));
-}
-
-function renderTournamentsList(list) {
+function legacyRenderTournamentsList(list) {
   const c = document.getElementById('tournaments-list');
   if (!list.length) {
     c.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:3rem;color:var(--text-hint);">
@@ -763,6 +777,102 @@ function renderTournamentsList(list) {
   }).join('');
 }
 
+function filterTournaments(q) {
+  App.homeFilters.name = q || '';
+  const input = document.getElementById('home-filter-name');
+  if (input) input.value = App.homeFilters.name;
+  renderTournamentsList(App.tournaments);
+}
+
+function updateHomeFilter(key, value) {
+  App.homeFilters[key] = key === 'ranked' ? !!value : String(value || '');
+  renderTournamentsList(App.tournaments);
+}
+
+function toggleFinishedHomeSection() {
+  App.homeFinishedExpanded = !App.homeFinishedExpanded;
+  renderTournamentsList(App.tournaments);
+}
+
+function sectionMoreLinkClick(event, section) {
+  if (!isPlainLeftClick(event)) return;
+  event.preventDefault();
+  toast('La pagina de ' + section + ' se agregara despues.', 'info');
+}
+
+function homeVisibleTournaments(list) {
+  const filters = App.homeFilters;
+  const nameQuery = String(filters.name || '').trim().toLowerCase();
+  return (list || [])
+    .filter(t => (t.visibility || 'public') !== 'private')
+    .filter(t => !nameQuery || [
+      t.name,
+      t.organizerName,
+      t.organizerUsername,
+    ].some(value => String(value || '').toLowerCase().includes(nameQuery)))
+    .filter(t => !filters.visibility || (t.visibility || 'public') === filters.visibility)
+    .filter(t => !filters.ranked || !!t.isRanked)
+    .sort(homeTournamentSorter(filters.sort));
+}
+
+function homeTournamentSorter(sortKey) {
+  const key = sortKey || 'created-desc';
+  return (a, b) => {
+    if (key.startsWith('scheduled')) {
+      const aTime = a.scheduledStartAt || (key.endsWith('asc') ? Number.MAX_SAFE_INTEGER : 0);
+      const bTime = b.scheduledStartAt || (key.endsWith('asc') ? Number.MAX_SAFE_INTEGER : 0);
+      return key.endsWith('asc') ? aTime - bTime : bTime - aTime;
+    }
+    const aCreated = Date.parse(a.createdAt || '') || 0;
+    const bCreated = Date.parse(b.createdAt || '') || 0;
+    return key.endsWith('asc') ? aCreated - bCreated : bCreated - aCreated;
+  };
+}
+
+function renderTournamentsList(list) {
+  const c = document.getElementById('tournaments-list');
+  if (!c) return;
+  const visible = homeVisibleTournaments(list);
+  if (!visible.length) {
+    c.innerHTML = `<div class="home-empty-state">
+      <div style="font-size:3rem;margin-bottom:1rem;">♦</div>
+      <p>No hay torneos que coincidan con los filtros.</p>
+      <a class="btn btn-outline" href="/create" onclick="createLinkClick(event)" style="margin-top:1rem;">Crear el primero</a>
+    </div>`;
+    return;
+  }
+  const lobby = visible.filter(t => t.status === 'lobby');
+  const active = visible.filter(t => t.status === 'active' || t.status === 'review');
+  const finished = visible.filter(t => t.status === 'finished');
+  c.innerHTML = [
+    renderHomeSection('lobby', 'En lobby', lobby, false),
+    renderHomeSection('active', 'En curso', active, false),
+    renderHomeSection('finished', 'Finalizados', finished, true),
+  ].join('');
+}
+
+function renderHomeSection(key, title, tournaments, collapsible) {
+  const expanded = !collapsible || App.homeFinishedExpanded;
+  const shown = tournaments.slice(0, 10);
+  return `<section class="home-tournament-section ${collapsible && !expanded ? 'is-collapsed' : ''}">
+    <div class="home-section-header">
+      <button class="home-section-title ${collapsible ? 'is-toggle' : ''}" ${collapsible ? 'onclick="toggleFinishedHomeSection()"' : ''}>
+        ${collapsible ? `<span class="home-collapse-icon">${expanded ? '-' : '+'}</span>` : ''}
+        <span>${title}</span>
+        <span class="badge badge-gray">${tournaments.length}</span>
+      </button>
+      <a class="btn btn-ghost btn-sm" href="/tournaments/${key}" onclick="sectionMoreLinkClick(event,'${jsAttr(title.toLowerCase())}')">Ver mas</a>
+    </div>
+    ${expanded ? `
+      ${shown.length ? `<div class="home-section-scroll-wrap">
+        <div class="home-section-scroll">
+          ${shown.map(renderTournamentHomeCard).join('')}
+        </div>
+      </div>` : `<div class="home-section-empty">No hay torneos en esta categoria.</div>`}
+    ` : ''}
+  </section>`;
+}
+
 function renderTournamentHomeCard(t) {
   const statusMap = {
     lobby: { label: 'Lobby', badge: 'badge-gray' },
@@ -773,7 +883,7 @@ function renderTournamentHomeCard(t) {
   const status = statusMap[t.status] || statusMap.lobby;
   const isOrg = isTournamentManager(t);
   return `<a class="card tournament-card" href="${tournamentHref(t.id)}" onclick="tournamentLinkClick(event,'${jsAttr(t.id)}')">
-    ${renderTournamentBanner(t, 'tournament-card-banner')}
+    ${renderTournamentCardBanner(t)}
     <div class="tournament-card-row tournament-card-tags">
       ${t.isRanked ? '<span class="badge badge-gold">Rankeado</span>' : '<span class="badge badge-gray">Normal</span>'}
       <span class="badge ${status.badge}">${status.label}</span>
@@ -1060,9 +1170,11 @@ function renderLobby(t) {
             ${viewerTournamentRoleBadge(t)}
           </div>
         </div>
-        <span class="badge badge-gray">Lobby</span>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+          ${renderTournamentSettingsButton(t)}
+          <span class="badge badge-gray">Lobby</span>
+        </div>
       </div>
-      ${renderTournamentBannerControl(t)}
       ${t.prizes.length ? `<div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);">
         <span class="section-title">Premios</span>
         <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">${t.prizes.map(renderPrize).join('')}</div><div style="display:none;">${t.prizes.map(p => `<div class="prize-card">
@@ -1080,12 +1192,7 @@ function renderLobby(t) {
 function renderLobbyModerators(t) {
   const el = document.getElementById('lobby-moderators');
   if (!el) return;
-  if (!t.isOrganizer) { el.innerHTML = ''; return; }
-  el.innerHTML = `
-    <div class="card">
-      <span class="section-title">Moderadores</span>
-      ${renderModeratorPanel(t)}
-    </div>`;
+  el.innerHTML = '';
 }
 
 function renderLobbyRequests(t) {
@@ -1268,17 +1375,189 @@ async function updateTableMode(tid, tableMode) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
-async function updateTournamentBanner(tid) {
-  const bannerUrl = document.getElementById('tournament-banner-url')?.value.trim() || '';
+function renderCurrentTournamentView(t) {
+  if (!t || App.currentTournamentId !== t.id) return;
+  if (App.currentView === 'lobby') renderLobby(t);
+  else if (App.currentView === 'organizer') renderOrganizerView(t);
+  else if (App.currentView === 'spectator') renderSpectatorView(t);
+}
+
+function readNullableIntInput(id) {
+  const raw = document.getElementById(id)?.value;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function renderTournamentSettingsButton(t) {
+  if (!isTournamentManager(t) || t.status === 'finished') return '';
+  return `<button class="btn btn-outline btn-sm" onclick="openTournamentSettingsModal('${jsAttr(t.id)}')">Configurar torneo</button>`;
+}
+
+function openTournamentSettingsModal(tid) {
+  const t = App.tournaments.find(item => item.id === tid);
+  if (!t || !isTournamentManager(t) || t.status === 'finished') return;
+  const hasStart = !!t.scheduledStartAt;
+  const effectiveMinimum = t.minimumPlayers || (t.isRanked ? 8 : 2);
+  const maxInvalid = t.maxPlayers && t.maxPlayers < effectiveMinimum;
+  showModal(`
+    <div id="tournament-settings-modal" class="settings-modal">
+      <div class="settings-modal-header">
+        <div>
+          <h2>Configuracion del torneo</h2>
+          <p>${escHtml(t.name)}</p>
+        </div>
+        <span class="badge ${t.isRanked ? 'badge-gold' : 'badge-gray'}">${t.isRanked ? 'Oficial' : 'Normal'}</span>
+      </div>
+
+      <div class="settings-section">
+        <label class="settings-label" for="tournament-settings-banner">Banner del torneo</label>
+        <input id="tournament-settings-banner" class="input" type="url" value="${escHtml(t.bannerUrl || '')}" placeholder="URL de imagen para el banner" />
+      </div>
+
+      <div class="settings-section">
+        <label class="settings-check">
+          <input id="tournament-settings-has-start" type="checkbox" ${hasStart ? 'checked' : ''} onchange="toggleTournamentStartDateInput(this.checked)" />
+          <span>Programar fecha y hora de inicio</span>
+        </label>
+        <input id="tournament-settings-start" class="input" type="datetime-local" value="${dateTimeLocalValue(t.scheduledStartAt)}" ${hasStart ? '' : 'disabled'} />
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-grid">
+          <label>
+            <span class="settings-label">Minimo personalizado</span>
+            <input id="tournament-settings-min" class="input" type="number" min="2" max="999" value="${t.minPlayers ?? ''}" placeholder="Sin minimo extra" />
+          </label>
+          <label>
+            <span class="settings-label">Maximo de jugadores</span>
+            <input id="tournament-settings-max" class="input ${maxInvalid ? 'input-invalid' : ''}" type="number" min="2" max="999" value="${t.maxPlayers ?? ''}" placeholder="Sin maximo" />
+          </label>
+        </div>
+        <div class="settings-note">Minimo efectivo actual: ${effectiveMinimum}. Los torneos oficiales nunca bajan de 8 jugadores.</div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-grid">
+          <label>
+            <span class="settings-label">Disposicion</span>
+            <select id="tournament-settings-pairing" class="input">
+              <option value="snake" ${(t.pairingMethod || 'snake') === 'snake' ? 'selected' : ''}>Snake</option>
+              <option value="random" ${t.pairingMethod === 'random' ? 'selected' : ''}>Random</option>
+              <option value="balanced" ${t.pairingMethod === 'balanced' ? 'selected' : ''}>Balanceado</option>
+            </select>
+          </label>
+          <label>
+            <span class="settings-label">Tipo de mesas</span>
+            <select id="tournament-settings-table-mode" class="input">
+              <option value="multi" ${(t.tableMode || 'multi') === 'multi' ? 'selected' : ''}>Multi</option>
+              <option value="versus" ${t.tableMode === 'versus' ? 'selected' : ''}>Versus</option>
+            </select>
+          </label>
+          <label>
+            <span class="settings-label">Duracion base (min)</span>
+            <input id="tournament-settings-duration" class="input" type="number" min="0" max="9999" value="${t.roundDuration ?? 50}" />
+          </label>
+          ${t.status === 'lobby' ? `<label>
+            <span class="settings-label">Rondas</span>
+            <input id="tournament-settings-total-rounds" class="input" type="number" min="1" max="20" value="${t.totalRounds || 1}" />
+          </label>` : ''}
+        </div>
+        <div class="settings-note">Usa 0 minutos para jugar sin limite de tiempo.</div>
+      </div>
+
+      ${['active','review'].includes(t.status) ? `
+        <div class="settings-section">
+          <span class="settings-label">Rondas del torneo</span>
+          <div class="settings-inline-actions">
+            <span class="badge badge-gray">Actual: ${t.currentRound} / ${t.totalRounds}</span>
+            <button class="btn btn-outline btn-sm" onclick="addTournamentRoundFromSettings('${jsAttr(t.id)}')">+ Ronda</button>
+            <button class="btn btn-ghost btn-sm" onclick="removeTournamentRoundFromSettings('${jsAttr(t.id)}')">- Ronda</button>
+          </div>
+        </div>` : ''}
+
+      ${t.isOrganizer ? `
+        <div class="settings-section">
+          <span class="settings-label">Moderadores</span>
+          ${renderModeratorPanel(t)}
+        </div>
+        <div class="settings-section settings-danger-zone">
+          <div>
+            <span class="settings-label">Eliminar torneo</span>
+            <div class="settings-note">Solo el organizador puede ocultarlo y dejar el registro de restauracion.</div>
+          </div>
+          <button class="btn btn-danger btn-sm" onclick="openDeleteTournamentModal('${jsAttr(t.id)}')">Eliminar torneo</button>
+        </div>` : ''}
+
+      <div class="settings-actions">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveTournamentSettings('${jsAttr(t.id)}')">Guardar cambios</button>
+      </div>
+    </div>`, 'modal-wide');
+}
+
+async function saveTournamentSettings(tid) {
+  const hasStart = !!document.getElementById('tournament-settings-has-start')?.checked;
+  const minPlayers = readNullableIntInput('tournament-settings-min');
+  const maxPlayers = readNullableIntInput('tournament-settings-max');
+  const t = App.tournaments.find(item => item.id === tid);
+  const rankedMinimum = t?.isRanked ? 8 : 2;
+  const effectiveMinimum = Math.max(rankedMinimum, Number.isFinite(minPlayers) ? minPlayers : 0);
+  if (minPlayers !== null && maxPlayers !== null && minPlayers > maxPlayers) {
+    toast('El minimo no puede superar el maximo de jugadores', 'error');
+    return;
+  }
+  if (maxPlayers !== null && maxPlayers < effectiveMinimum) {
+    toast(`El maximo debe ser al menos ${effectiveMinimum} jugadores`, 'error');
+    return;
+  }
+  if (maxPlayers !== null && maxPlayers < (t?.players || []).length) {
+    toast(`El maximo no puede ser menor que los ${(t?.players || []).length} jugadores inscritos`, 'error');
+    return;
+  }
+
+  const body = {
+    bannerUrl: document.getElementById('tournament-settings-banner')?.value.trim() || '',
+    scheduledStartAt: hasStart ? readDateTimeLocal('tournament-settings-start') : null,
+    minPlayers,
+    maxPlayers,
+    pairingMethod: document.getElementById('tournament-settings-pairing')?.value || 'snake',
+    tableMode: document.getElementById('tournament-settings-table-mode')?.value || 'multi',
+    roundDuration: readNullableIntInput('tournament-settings-duration') ?? 0,
+  };
+  const totalRounds = readNullableIntInput('tournament-settings-total-rounds');
+  if (totalRounds !== null) body.totalRounds = totalRounds;
+
   try {
     await flushAllPendingChanges(tid);
-    const t = await api('/api/tournaments/' + tid + '/settings', { method: 'PATCH', body: { bannerUrl } });
+    const updated = await api('/api/tournaments/' + tid + '/settings', { method: 'PATCH', body });
+    _updateTournamentCache(updated);
+    closeModal();
+    renderCurrentTournamentView(updated);
+    toast('Configuracion del torneo actualizada', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function addTournamentRoundFromSettings(tid) {
+  try {
+    await flushAllPendingChanges(tid);
+    const t = await api('/api/tournaments/' + tid + '/rounds', { method: 'POST' });
     _updateTournamentCache(t);
-    if (App.currentTournamentId === tid) {
-      if (App.currentView === 'lobby') renderLobby(t);
-      else renderOrganizerView(t);
-    }
-    toast('Banner del torneo actualizado', 'success');
+    renderCurrentTournamentView(t);
+    openTournamentSettingsModal(tid);
+    toast('Ronda agregada', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removeTournamentRoundFromSettings(tid) {
+  if (!confirm('Quitar una ronda futura o pendiente?')) return;
+  try {
+    await flushAllPendingChanges(tid);
+    const t = await api('/api/tournaments/' + tid + '/rounds', { method: 'DELETE' });
+    _updateTournamentCache(t);
+    renderCurrentTournamentView(t);
+    openTournamentSettingsModal(tid);
+    toast('Ronda quitada', 'success');
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -1332,6 +1611,83 @@ async function adjustRoundTime(tid, rid, deltaMinutes) {
     });
     _updateTournamentCache(t);
     renderOrganizerView(t);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function readPositiveMinutes(inputId, fallback = 5) {
+  const raw = document.getElementById(inputId)?.value;
+  const value = parseInt(raw, 10);
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(9999, value);
+}
+
+function adjustRoundTimeFromInput(tid, rid, direction) {
+  const minutes = readPositiveMinutes('round-time-delta-' + rid, 5);
+  return adjustRoundTime(tid, rid, direction < 0 ? -minutes : minutes);
+}
+
+function addExpiredRoundTime(tid, rid) {
+  const minutes = readPositiveMinutes('expired-extra-' + rid, 5);
+  App.expiredRounds.delete(rid);
+  closeModal();
+  return adjustRoundTime(tid, rid, minutes);
+}
+
+async function addTournamentRound(tid) {
+  try {
+    await flushAllPendingChanges(tid);
+    const t = await api('/api/tournaments/' + tid + '/rounds', { method: 'POST' });
+    _updateTournamentCache(t);
+    renderOrganizerView(t);
+    toast('Ronda agregada', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removeTournamentRound(tid) {
+  if (!confirm('Quitar una ronda futura o pendiente?')) return;
+  try {
+    await flushAllPendingChanges(tid);
+    const t = await api('/api/tournaments/' + tid + '/rounds', { method: 'DELETE' });
+    _updateTournamentCache(t);
+    renderOrganizerView(t);
+    toast('Ronda quitada', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function openDeleteTournamentModal(tid) {
+  const tournament = App.tournaments.find(t => t.id === tid);
+  showModal(`
+    <h2 style="font-size:1.2rem;font-weight:700;margin:0 0 0.25rem;">Eliminar torneo</h2>
+    <p style="color:var(--text-muted);font-size:0.9rem;margin:0 0 1rem;">
+      Esta accion oculta el torneo, deja de contar sus puntos y conserva un registro para poder restaurarlo despues.
+    </p>
+    <div style="display:flex;flex-direction:column;gap:0.85rem;">
+      <div class="card" style="padding:0.85rem;color:var(--text-muted);font-size:0.9rem;">
+        ${escHtml(tournament?.name || 'Torneo seleccionado')}
+      </div>
+      <input id="delete-tournament-password" class="input" type="password" placeholder="Clave del organizador" />
+      <textarea id="delete-tournament-reason" class="input" rows="3" placeholder="Motivo opcional"></textarea>
+      <div style="display:flex;gap:0.6rem;justify-content:flex-end;flex-wrap:wrap;">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-danger" onclick="confirmDeleteTournament('${jsAttr(tid)}')">Eliminar torneo</button>
+      </div>
+    </div>`);
+}
+
+async function confirmDeleteTournament(tid) {
+  const password = document.getElementById('delete-tournament-password')?.value || '';
+  const reason = document.getElementById('delete-tournament-reason')?.value || '';
+  if (!password) { toast('Ingresa tu clave para eliminar el torneo', 'error'); return; }
+  try {
+    await flushAllPendingChanges(tid);
+    await api('/api/tournaments/' + tid, {
+      method: 'DELETE',
+      body: { password, reason },
+    });
+    App.tournaments = App.tournaments.filter(t => t.id !== tid);
+    closeModal();
+    toast('Torneo eliminado', 'success');
+    navigate('home');
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -1446,7 +1802,7 @@ function renderRoundTimeControls(t, round) {
     return `<div class="round-time-controls">
       <label>
         <span>Tiempo max.</span>
-        <input class="input" type="number" min="0" max="240" value="${limit}" onchange="updateRoundDuration('${t.id}','${round.id}',this.value)" />
+        <input class="input" type="number" min="0" max="9999" value="${limit}" onchange="updateRoundDuration('${t.id}','${round.id}',this.value)" />
       </label>
       <span class="time-note">${limit === 0 ? 'Sin limite de tiempo' : limit + ' min por ronda'}</span>
     </div>`;
@@ -1454,8 +1810,12 @@ function renderRoundTimeControls(t, round) {
 
   return `<div class="round-time-controls">
     <span class="time-note">${limit === 0 ? 'Sin limite de tiempo' : 'Limite: ' + limit + ' min'}</span>
-    <button class="btn btn-ghost btn-sm" onclick="adjustRoundTime('${t.id}','${round.id}',-5)">-5 min</button>
-    <button class="btn btn-ghost btn-sm" onclick="adjustRoundTime('${t.id}','${round.id}',5)">+5 min</button>
+    <label>
+      <span>Ajuste</span>
+      <input id="round-time-delta-${round.id}" class="input" type="number" min="1" max="9999" value="5" />
+    </label>
+    <button class="btn btn-ghost btn-sm" onclick="adjustRoundTimeFromInput('${t.id}','${round.id}',-1)">Quitar</button>
+    <button class="btn btn-ghost btn-sm" onclick="adjustRoundTimeFromInput('${t.id}','${round.id}',1)">Agregar</button>
   </div>`;
 }
 
@@ -1574,6 +1934,7 @@ function renderOrganizerView(t) {
           </div>
         </div>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+          ${renderTournamentSettingsButton(t)}
           ${isReview ? `
             <button class="btn btn-primary btn-sm" onclick="finalizeTournamentResults('${t.id}')">
               Proceder a resultados del torneo
@@ -1608,8 +1969,6 @@ function renderOrganizerView(t) {
           <button class="btn btn-ghost btn-sm" onclick="refreshTournament()">↻</button>
         </div>
       </div>
-      ${renderTournamentBannerControl(t)}
-
       <div class="phase-card phase-${phase.key}">
         <div>
           <span class="section-title" style="margin:0 0 0.4rem;padding:0;border:none;">Fase actual</span>
@@ -1665,10 +2024,6 @@ function renderOrganizerView(t) {
             <span class="section-title">Panel de Jugadores</span>
             ${renderPlayerControlPanel(t)}
           </div>
-          ${t.isOrganizer ? `<div class="card">
-            <span class="section-title">Moderadores</span>
-            ${renderModeratorPanel(t)}
-          </div>` : ''}
           ${t.prizes.length ? `
             <div class="card">
               <span class="section-title">Premios</span>
@@ -1958,10 +2313,46 @@ async function adjustTableScores(tid, rid, tableId, delta) {
 
 async function adjustRoundScores(tid, rid, delta) {
   try {
-    await flushAllPendingChanges(tid, rid);
-    const t = await api('/api/tournaments/' + tid + '/rounds/' + rid + '/scores', { method: 'PATCH', body: { delta } });
-    _updateTournamentCache(t);
-    renderOrganizerView(t);
+    const t = App.tournaments.find(tt => tt.id === tid);
+    const round = t?.rounds.find(r => r.id === rid);
+    const parsedDelta = parseInt(delta, 10);
+    if (!t || !round || !Number.isFinite(parsedDelta) || parsedDelta === 0) return;
+
+    for (const table of round.tables || []) {
+      if (table.type === 'bench') continue;
+      for (const player of table.players || []) {
+        if (player.eliminated) continue;
+        const nextScore = Math.max(0, (player.score || 0) + parsedDelta);
+        player.score = nextScore;
+        updateTableScoreInputs(table.id, player.userId, nextScore);
+        queueRoundChange(tid, rid, { type: 'tablePlayer', tableId: table.id, userId: player.userId, score: nextScore });
+      }
+    }
+    renderRoundTablesFromCache(tid, rid);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function adjustTournamentScores(tid, delta) {
+  try {
+    const t = App.tournaments.find(tt => tt.id === tid);
+    const parsedDelta = parseInt(delta, 10);
+    if (!t || !Number.isFinite(parsedDelta) || parsedDelta === 0) return;
+    const openRound = openRoundForPlayerPanel(t);
+    if (openRound) {
+      for (const player of t.players || []) {
+        const nextScore = Math.max(0, (player.score || 0) + parsedDelta);
+        player.score = nextScore;
+        updateGlobalScoreDisplays(player.userId, nextScore);
+        queueRoundChange(tid, openRound.id, { type: 'playerScore', userId: player.userId, score: nextScore });
+      }
+      refreshStandingsCard(t);
+      return;
+    }
+
+    await flushAllPendingChanges(tid);
+    const updated = await api('/api/tournaments/' + tid + '/players/scores', { method: 'PATCH', body: { delta } });
+    _updateTournamentCache(updated);
+    renderOrganizerView(updated);
   } catch(e) { toast(e.message, 'error'); }
 }
 
@@ -2098,6 +2489,7 @@ function renderPlayerPanelTotalScoreControl(t, player) {
 function renderPlayerControlPanelV2(t) {
   const openRound = openRoundForPlayerPanel(t);
   const bulkId = openRound ? `bulk-round-${openRound.id}` : '';
+  const bulkTournamentId = `bulk-tournament-${t.id}`;
   const playerRows = !t.players.length ? '<p style="color:var(--text-hint);font-size:0.9rem;">Sin jugadores.</p>' : t.players.map(p => `
     <div class="card-elevated player-panel-card ${p.eliminatedFromTournament ? 'disqualified' : ''}">
       <div class="player-panel-row">
@@ -2142,6 +2534,14 @@ function renderPlayerControlPanelV2(t) {
         `adjustRoundScores('${t.id}','${openRound.id}',scoreDeltaValue('${bulkId}'))`
       )}
     </div>` : ''}
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:0.65rem;flex-wrap:wrap;">
+      <span style="font-size:0.82rem;color:var(--text-muted);">Todos los jugadores del torneo</span>
+      ${renderBulkScoreControl(
+        bulkTournamentId,
+        `adjustTournamentScores('${t.id}',-scoreDeltaValue('${bulkTournamentId}'))`,
+        `adjustTournamentScores('${t.id}',scoreDeltaValue('${bulkTournamentId}'))`
+      )}
+    </div>
     <div style="display:flex;flex-direction:column;gap:0.65rem;">${playerRows}</div>
     <details class="player-invite-details">
       <summary>Invitar o agregar jugadores</summary>
@@ -2187,7 +2587,8 @@ async function addModerator(tid) {
     await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/moderators', { method: 'POST', body: { userId } });
     _updateTournamentCache(t);
-    if (App.currentView === 'lobby') renderLobby(t); else renderOrganizerView(t);
+    renderCurrentTournamentView(t);
+    if (document.getElementById('tournament-settings-modal')) openTournamentSettingsModal(tid);
     toast('Moderador agregado', 'success');
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -2197,7 +2598,8 @@ async function removeModerator(tid, userId) {
     await flushAllPendingChanges(tid);
     const t = await api('/api/tournaments/' + tid + '/moderators/' + encodeURIComponent(userId), { method: 'DELETE' });
     _updateTournamentCache(t);
-    if (App.currentView === 'lobby') renderLobby(t); else renderOrganizerView(t);
+    renderCurrentTournamentView(t);
+    if (document.getElementById('tournament-settings-modal')) openTournamentSettingsModal(tid);
     toast('Moderador eliminado', 'info');
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -2792,7 +3194,8 @@ function renderStandings(players, tid, editable, rounds) {
   const icons = ['🥇','🥈','🥉'];
   const fmtOwp = (v) => v === null ? '—' : (v * 100).toFixed(1) + '%';
 
-  return `<table class="standings-table">
+  return `<div class="standings-table-wrap">
+  <table class="standings-table">
     <thead><tr>
       <th style="width:1.8rem;">#</th>
       <th>Jugador</th>
@@ -2828,7 +3231,8 @@ function renderStandings(players, tid, editable, rounds) {
           <td style="text-align:right;font-size:0.78rem;color:var(--text-hint);" title="OW%: ${fmtOwp(p.owp)}">${fmtOwp(p.owp)}</td>
         </tr>`).join('')}
     </tbody>
-  </table>`;
+  </table>
+  </div>`;
 }
 
 function renderStandingsV2(players, tid, editable, rounds) {
@@ -2844,28 +3248,44 @@ function renderStandingsV2(players, tid, editable, rounds) {
   });
   const places = ['1', '2', '3'];
   const fmtOwp = value => value === null ? '-' : (value * 100).toFixed(1) + '%';
-  return `<table class="standings-table">
+  const standingsMinWidth = 252
+    + (columns.cards ? 62 : 0)
+    + (columns.wins ? 38 : 0)
+    + (columns.draws ? 38 : 0)
+    + (columns.owp ? 54 : 0)
+    + (editable ? 28 : 0);
+  return `<div class="standings-table-wrap">
+  <table class="standings-table" style="--standings-min-width:${standingsMinWidth}px;">
+    <colgroup>
+      <col class="standings-col-rank" />
+      <col class="standings-col-player" />
+      <col class="standings-col-score" />
+      ${columns.cards ? '<col class="standings-col-cards" />' : ''}
+      ${columns.wins ? '<col class="standings-col-small" />' : ''}
+      ${columns.draws ? '<col class="standings-col-small" />' : ''}
+      ${columns.owp ? '<col class="standings-col-owp" />' : ''}
+    </colgroup>
     <thead><tr>
-      <th style="width:1.8rem;">#</th>
-      <th>Jugador</th>
-      <th style="text-align:right;" title="Puntos totales">Pts</th>
-      ${columns.cards ? '<th style="text-align:right;" title="Tarjetas">Tarj.</th>' : ''}
-      ${columns.wins ? '<th style="text-align:right;" title="Victorias">V</th>' : ''}
-      ${columns.draws ? '<th style="text-align:right;" title="Empates">E</th>' : ''}
-      ${columns.owp ? '<th style="text-align:right;" title="Opponent Win Percentage">OW%</th>' : ''}
+      <th class="standings-rank-cell">#</th>
+      <th class="standings-player-cell">Jugador</th>
+      <th class="standings-number-cell" title="Puntos totales">Pts</th>
+      ${columns.cards ? '<th class="standings-number-cell" title="Tarjetas">Tarj.</th>' : ''}
+      ${columns.wins ? '<th class="standings-number-cell" title="Victorias">V</th>' : ''}
+      ${columns.draws ? '<th class="standings-number-cell" title="Empates">E</th>' : ''}
+      ${columns.owp ? '<th class="standings-number-cell" title="Opponent Win Percentage">OW%</th>' : ''}
     </tr></thead>
     <tbody>
       ${sorted.map((p, i) => `
         <tr class="${i < 3 ? 'rank-' + (i + 1) : ''}">
-          <td style="font-family:'Cinzel',serif;font-size:0.82rem;">${places[i] || i + 1}</td>
-          <td style="max-width:170px;">
-            <div style="display:flex;align-items:center;gap:0.4rem;min-width:0;">
+          <td class="standings-rank-cell">${places[i] || i + 1}</td>
+          <td class="standings-player-cell">
+            <div class="standings-player">
               <div class="player-avatar" style="width:20px;height:20px;font-size:0.5rem;flex-shrink:0;">${initials(p.displayName)}</div>
               ${playerProfileLink(p, 'standings-player-link')}
               ${anonymousBadge(p, true)}
             </div>
           </td>
-          <td style="text-align:right;">
+          <td class="standings-number-cell">
             ${editable ? `
               <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.15rem;">
                 <button class="score-btn" style="width:16px;height:16px;font-size:0.75rem;border-radius:3px;" onclick="adjustGlobalScore('${tid}','${p.userId}',-1)">-</button>
@@ -2874,13 +3294,14 @@ function renderStandingsV2(players, tid, editable, rounds) {
               </div>` :
               `<span style="font-family:'Cinzel',serif;font-weight:700;font-size:0.88rem;">${p.score||0}</span>`}
           </td>
-          ${columns.cards ? `<td style="text-align:right;">${cardBoxes(p)}${p.eliminatedFromTournament ? '<span class="badge badge-red badge-compact">DQ</span>' : ''}</td>` : ''}
-          ${columns.wins ? `<td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.wins||0}</td>` : ''}
-          ${columns.draws ? `<td style="text-align:right;font-size:0.82rem;color:var(--text-muted);">${p.draws||0}</td>` : ''}
-          ${columns.owp ? `<td style="text-align:right;font-size:0.78rem;color:var(--text-hint);" title="OW%: ${fmtOwp(p.owp)}">${fmtOwp(p.owp)}</td>` : ''}
+          ${columns.cards ? `<td class="standings-number-cell standings-cards-cell">${cardBoxes(p)}${p.eliminatedFromTournament ? '<span class="badge badge-red badge-compact">DQ</span>' : ''}</td>` : ''}
+          ${columns.wins ? `<td class="standings-number-cell standings-muted-cell">${p.wins||0}</td>` : ''}
+          ${columns.draws ? `<td class="standings-number-cell standings-muted-cell">${p.draws||0}</td>` : ''}
+          ${columns.owp ? `<td class="standings-number-cell standings-hint-cell" title="OW%: ${fmtOwp(p.owp)}">${fmtOwp(p.owp)}</td>` : ''}
         </tr>`).join('')}
     </tbody>
-  </table>`;
+  </table>
+  </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2904,6 +3325,7 @@ function profileStatBox(label, value) {
 function renderProfileView({ user, organizedActive, organizedFinished, moderatingActive = [], moderatedFinished = [], viewerOrganizedParticipations = [], playingIn, playedTournamentsVisible = true, profileStats = {}, invitedTo = [], officialRanking = [] }) {
   const isOwn = App.currentUser?.id === user.id;
   const canInviteFromProfile = !isOwn && organizerLobbyTournamentsForInvite(user.id).length > 0;
+  App.currentProfileUser = user;
   // Normalizar _id → id para compatibilidad con MongoDB
   const normalize = t => ({ ...t, id: t._id || t.id });
   organizedActive   = organizedActive.map(normalize);
@@ -2928,6 +3350,7 @@ function renderProfileView({ user, organizedActive, organizedFinished, moderatin
         </div>
       </div>
       ${canInviteFromProfile ? `<button class="btn btn-primary btn-sm" onclick="inviteProfileUser('${user.id}')">Invitar a torneo</button>` : ''}
+      ${isOwn ? '<button class="btn btn-outline btn-sm" onclick="openProfileSettingsModal()">Configurar perfil</button>' : ''}
       <button class="btn btn-ghost btn-sm" onclick="copyLink('${jsAttr(profileHref(user))}')" title="Copiar link del perfil">
         🔗 Copiar link
       </button>
@@ -2944,26 +3367,6 @@ function renderProfileView({ user, organizedActive, organizedFinished, moderatin
       </div>
     </div>
 
-    ${isOwn ? `
-      <div class="card" style="margin-bottom:1.5rem;">
-        <span class="section-title">Preferencias de Invitacion</span>
-        <select class="input" onchange="updateInvitationPreference(this.value)">
-          <option value="manual" ${(user.invitationPolicy||'manual')==='manual'?'selected':''}>Aceptar mediante invitacion</option>
-          <option value="auto" ${user.invitationPolicy==='auto'?'selected':''}>Aceptar automaticamente</option>
-        </select>
-        <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.9rem;color:var(--text-muted);font-size:0.9rem;">
-          <input type="checkbox" ${user.showPlayedTournaments !== false ? 'checked' : ''} onchange="updatePlayedVisibility(this.checked)" />
-          Mostrar publicamente mis torneos jugados
-        </label>
-        <div style="margin-top:1rem;">
-          <label class="section-title" style="margin-bottom:0.55rem;">Banner de perfil</label>
-          <div class="banner-url-control">
-            <input id="profile-banner-url" class="input" type="url" value="${escHtml(user.bannerUrl || '')}" placeholder="URL de imagen para tu banner" />
-            <button class="btn btn-outline btn-sm" onclick="updateProfileBannerUrl()">Guardar banner</button>
-          </div>
-        </div>
-      </div>` : ''}
-
     ${isOwn && invitedTo.length ? `
       <div style="margin-bottom:1.5rem;">
         <span class="section-title">Invitaciones Pendientes (${invitedTo.length})</span>
@@ -2979,7 +3382,9 @@ function renderProfileView({ user, organizedActive, organizedFinished, moderatin
           ${officialRanking.length ? officialRanking.slice(0,20).map((r,i)=>`
             <div style="display:flex;align-items:center;gap:0.75rem;padding:0.55rem 0.8rem;border-bottom:1px solid var(--border);">
               <span style="font-family:'Cinzel',serif;color:var(--text-hint);width:1.6rem;">${i+1}</span>
-              <span style="flex:1;font-weight:600;">${escHtml(r.displayName)}</span>
+              ${r.isAnonymous
+                ? `<span class="profile-ranking-name">${escHtml(r.displayName)}</span>`
+                : `<a class="profile-ranking-link" href="${profileHref(r.username || r.userId)}" onclick="profileLinkClick(event,'${jsAttr(r.username || r.userId)}')">${escHtml(r.displayName)}</a>`}
               ${anonymousBadge(r)}
               <span class="badge badge-gold">${r.points} pts</span>
               <span style="font-size:0.78rem;color:var(--text-muted);">${r.tournamentsPlayed} torneos</span>
@@ -3131,32 +3536,56 @@ function invitationRow(t) {
     </div>`;
 }
 
-async function updateInvitationPreference(invitationPolicy) {
-  try {
-    const r = await api('/api/users/me/preferences', { method: 'PATCH', body: { invitationPolicy } });
-    App.currentUser = r.user;
-    renderHeader();
-    toast('Preferencia actualizada', 'success');
-  } catch(e) { toast(e.message, 'error'); }
+function openProfileSettingsModal() {
+  const user = App.currentProfileUser || App.currentUser;
+  if (!user || App.currentUser?.id !== user.id) return;
+  showModal(`
+    <div class="settings-modal">
+      <div class="settings-modal-header">
+        <div>
+          <h2>Configuracion del perfil</h2>
+          <p>Ajusta privacidad, invitaciones y banner sin llenar el perfil de controles.</p>
+        </div>
+      </div>
+      <div class="settings-section">
+        <label class="settings-label" for="profile-settings-invitation">Invitaciones a torneos</label>
+        <select id="profile-settings-invitation" class="input">
+          <option value="manual" ${(user.invitationPolicy || 'manual') === 'manual' ? 'selected' : ''}>Aceptar mediante invitacion</option>
+          <option value="auto" ${user.invitationPolicy === 'auto' ? 'selected' : ''}>Aceptar automaticamente</option>
+        </select>
+      </div>
+      <div class="settings-section">
+        <label class="settings-check">
+          <input id="profile-settings-show-played" type="checkbox" ${user.showPlayedTournaments !== false ? 'checked' : ''} />
+          <span>Mostrar publicamente mis torneos jugados</span>
+        </label>
+        <div class="settings-note">Tu resumen publico siempre mantiene cantidad de torneos, victorias y estadisticas disciplinarias.</div>
+      </div>
+      <div class="settings-section">
+        <label class="settings-label" for="profile-settings-banner">Banner de perfil</label>
+        <input id="profile-settings-banner" class="input" type="url" value="${escHtml(user.bannerUrl || '')}" placeholder="URL de imagen para tu banner" />
+      </div>
+      <div class="settings-actions">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveProfileSettings()">Guardar cambios</button>
+      </div>
+    </div>`);
 }
 
-async function updatePlayedVisibility(showPlayedTournaments) {
+async function saveProfileSettings() {
+  const invitationPolicy = document.getElementById('profile-settings-invitation')?.value || 'manual';
+  const showPlayedTournaments = !!document.getElementById('profile-settings-show-played')?.checked;
+  const bannerUrl = document.getElementById('profile-settings-banner')?.value.trim() || '';
   try {
-    const r = await api('/api/users/me/preferences', { method: 'PATCH', body: { showPlayedTournaments } });
+    const r = await api('/api/users/me/preferences', {
+      method: 'PATCH',
+      body: { invitationPolicy, showPlayedTournaments, bannerUrl },
+    });
     App.currentUser = r.user;
+    App.currentProfileUser = r.user;
     renderHeader();
-    toast('Privacidad actualizada', 'success');
-    openProfile(profileSlug(App.currentUser));
-  } catch(e) { toast(e.message, 'error'); }
-}
-
-async function updateProfileBannerUrl() {
-  const bannerUrl = document.getElementById('profile-banner-url')?.value.trim() || '';
-  try {
-    const r = await api('/api/users/me/preferences', { method: 'PATCH', body: { bannerUrl } });
-    App.currentUser = r.user;
-    renderHeader();
-    toast('Banner de perfil actualizado', 'success');
+    closeModal();
+    toast('Perfil actualizado', 'success');
     openProfile(profileSlug(App.currentUser));
   } catch(e) { toast(e.message, 'error'); }
 }
@@ -3227,7 +3656,11 @@ function handleRoundTimeExpired(tid, rid) {
       La ronda ${round.number} llego al limite. Puedes agregar tiempo, dejar que siga corriendo o cerrar la ronda revisando cada mesa.
     </p>
     <div style="display:flex;flex-direction:column;gap:0.75rem;">
-      <button class="btn btn-primary" onclick="App.expiredRounds.delete('${rid}'); closeModal(); adjustRoundTime('${tid}','${rid}',5)">Agregar 5 min</button>
+      <label style="display:flex;align-items:center;gap:0.6rem;color:var(--text-muted);font-size:0.9rem;">
+        <span>Minutos extra</span>
+        <input id="expired-extra-${rid}" class="input" type="number" min="1" max="9999" value="5" style="width:110px;" />
+      </label>
+      <button class="btn btn-primary" onclick="addExpiredRoundTime('${tid}','${rid}')">Agregar tiempo</button>
       <button class="btn btn-ghost" onclick="closeModal(); toast('El tiempo seguira corriendo', 'info')">Dejar correr</button>
       <button class="btn btn-warning" onclick="closeModal(); openFinishRoundModal('${tid}','${rid}')">Terminar ronda</button>
     </div>`);

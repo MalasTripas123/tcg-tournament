@@ -94,6 +94,21 @@ async function updateSettings(req, res) {
   return ok(res, presentTournament(tournament, viewer(req)));
 }
 
+async function addRound(req, res) {
+  const tournament = await tournamentService.addRound(req.params.id, req.session.userId);
+  return ok(res, presentTournament(tournament, viewer(req)));
+}
+
+async function removeRound(req, res) {
+  const tournament = await tournamentService.removeRound(req.params.id, req.session.userId);
+  return ok(res, presentTournament(tournament, viewer(req)));
+}
+
+async function deleteTournament(req, res) {
+  await tournamentService.deleteTournament(req.params.id, req.session.userId, req.validated.body);
+  return ok(res, { ok: true, deleted: true, id: req.params.id });
+}
+
 async function replaceTables(req, res) {
   const tournament = await tournamentService.replaceRoundTables(
     req.params.id,
@@ -147,6 +162,15 @@ async function adjustRoundScores(req, res) {
     req.params.id,
     req.session.userId,
     req.params.roundId,
+    req.validated.body.delta
+  );
+  return ok(res, presentTournament(tournament, viewer(req)));
+}
+
+async function adjustTournamentScores(req, res) {
+  const tournament = await tournamentService.adjustTournamentScores(
+    req.params.id,
+    req.session.userId,
     req.validated.body.delta
   );
   return ok(res, presentTournament(tournament, viewer(req)));
@@ -267,6 +291,9 @@ module.exports = {
   handleInvitation,
   start,
   updateSettings,
+  addRound,
+  removeRound,
+  deleteTournament,
   replaceTables,
   addTable,
   deleteTable,
@@ -274,6 +301,7 @@ module.exports = {
   updateTablePlayer,
   adjustTableScores,
   adjustRoundScores,
+  adjustTournamentScores,
   applyRoundChanges,
   updateTournamentPlayer,
   appealPlayerDiscipline,

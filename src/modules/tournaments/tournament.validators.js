@@ -5,6 +5,7 @@ const PRIZE_TYPES = new Set(['text', 'card', 'credit']);
 const RESULTS = new Set(['winner', 'draw', 'none']);
 const PAIRING_METHODS = new Set(['snake', 'random', 'balanced']);
 const TABLE_MODES = new Set(['multi', 'versus']);
+const MAX_ROUND_DURATION_MINUTES = 9999;
 
 function asString(value, field, max = 160) {
   if (typeof value !== 'string' || !value.trim()) throw ApiError.badRequest(`${field} es requerido`);
@@ -96,7 +97,7 @@ function validateCreateTournament(req) {
       bannerUrl: optionalString(req.body.bannerUrl, 600),
       scheduledStartAt: optionalTimestamp(req.body.scheduledStartAt),
       totalRounds: asInt(req.body.totalRounds, 'Rondas', 1, 20),
-      roundDuration: asInt(req.body.roundDuration, 'Duracion', 0, 240, 50),
+      roundDuration: asInt(req.body.roundDuration, 'Duracion', 0, MAX_ROUND_DURATION_MINUTES, 50),
       minPlayers,
       maxPlayers,
       visibility,
@@ -151,7 +152,14 @@ function validateTournamentSettings(req) {
     if (!TABLE_MODES.has(req.body.tableMode)) throw ApiError.badRequest('Modo de mesas invalido');
     body.tableMode = req.body.tableMode;
   }
-  if (req.body.roundDuration !== undefined) body.roundDuration = asInt(req.body.roundDuration, 'Duracion', 0, 240);
+  if (req.body.roundDuration !== undefined) body.roundDuration = asInt(req.body.roundDuration, 'Duracion', 0, MAX_ROUND_DURATION_MINUTES);
+  if (req.body.totalRounds !== undefined) body.totalRounds = asInt(req.body.totalRounds, 'Rondas', 1, 20);
+  if (req.body.scheduledStartAt !== undefined) body.scheduledStartAt = optionalTimestamp(req.body.scheduledStartAt);
+  if (req.body.minPlayers !== undefined) body.minPlayers = optionalInt(req.body.minPlayers, 'Minimo de jugadores', 2, 999);
+  if (req.body.maxPlayers !== undefined) body.maxPlayers = optionalInt(req.body.maxPlayers, 'Maximo de jugadores', 2, 999);
+  if (body.minPlayers !== undefined && body.maxPlayers !== undefined && body.minPlayers !== null && body.maxPlayers !== null && body.minPlayers > body.maxPlayers) {
+    throw ApiError.badRequest('El minimo no puede superar el maximo de jugadores');
+  }
   if (req.body.bannerUrl !== undefined) body.bannerUrl = optionalString(req.body.bannerUrl, 600);
   if (!Object.keys(body).length) throw ApiError.badRequest('No hay cambios para aplicar');
   return { body };
@@ -278,13 +286,24 @@ function validateFinishRound(req) {
 function validateRoundTime(req) {
   const body = {};
   if (req.body.timeLimitMinutes !== undefined) {
-    body.timeLimitMinutes = asInt(req.body.timeLimitMinutes, 'Tiempo limite', 0, 240);
+    body.timeLimitMinutes = asInt(req.body.timeLimitMinutes, 'Tiempo limite', 0, MAX_ROUND_DURATION_MINUTES);
   }
   if (req.body.deltaMinutes !== undefined) {
-    body.deltaMinutes = asInt(req.body.deltaMinutes, 'Ajuste de tiempo', -240, 240);
+    body.deltaMinutes = asInt(req.body.deltaMinutes, 'Ajuste de tiempo', -MAX_ROUND_DURATION_MINUTES, MAX_ROUND_DURATION_MINUTES);
   }
   if (!Object.keys(body).length) throw ApiError.badRequest('No hay cambios para aplicar');
   return { body };
+}
+
+function validateDeleteTournament(req) {
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  if (!password) throw ApiError.badRequest('Clave requerida');
+  return {
+    body: {
+      password,
+      reason: optionalString(req.body.reason, 600),
+    },
+  };
 }
 
 function validateRoundEditing(req) {
@@ -309,5 +328,6 @@ module.exports = {
   validateFinishTable,
   validateFinishRound,
   validateRoundTime,
+  validateDeleteTournament,
   validateRoundEditing,
 };

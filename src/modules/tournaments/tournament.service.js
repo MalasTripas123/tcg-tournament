@@ -1,6 +1,7 @@
 const ApiError = require('../../shared/http/ApiError');
 const { createId } = require('../../shared/utils/ids');
 const { now } = require('../../shared/utils/dates');
+const authService = require('../auth/auth.service');
 const userRepository = require('../users/user.repository');
 const tournamentRepository = require('./tournament.repository');
 const policies = require('./tournament.policies');
@@ -57,6 +58,10 @@ async function createTournament(data, organizerId) {
     minPlayers: data.minPlayers,
     maxPlayers: data.maxPlayers,
     status: 'lobby',
+    deletedAt: null,
+    deletedBy: '',
+    deletionReason: '',
+    deletionSnapshot: null,
     visibility: data.visibility || 'public',
     isRanked,
     pairingMethod: data.pairingMethod || 'snake',
@@ -190,19 +195,28 @@ async function handleJoinRequest(tournamentId, organizerId, userId, action) {
 
 async function handleInvitation(tournamentId, playerId, action) {
   const tournament = await loadTournament(tournamentId);
-  assertStatus(tournament, ['lobby', 'active'], 'No se pueden modificar invitaciones con el torneo finalizado');
   const request = tournament.joinRequests.find(r => r.userId === playerId && r.status === 'pending' && r.type === 'invite');
   if (!request) throw ApiError.notFound('Invitacion no encontrada');
 
-  request.status = action === 'accept' ? 'accepted' : 'rejected';
-  if (action === 'accept') {
-    const user = await userRepository.findByUid(playerId);
-    if (user && !tournament.players.some(player => player.userId === user.uid)) {
-      addPlayerToTournament(tournament, user);
-      recordAuditEvent(tournament, playerId, 'invitation_accepted', { userId: user.uid, displayName: user.displayName });
-    }
-  } else {
+  if (action === 'reject') {
+    request.status = 'rejected';
     recordAuditEvent(tournament, playerId, 'invitation_rejected', { userId: playerId });
+    return save(tournament);
+  }
+
+  const alreadyInTournament = tournament.players.some(player => player.userId === playerId);
+  if (alreadyInTournament) {
+    request.status = 'accepted';
+    recordAuditEvent(tournament, playerId, 'invitation_cleared_existing_player', { userId: playerId });
+    return save(tournament);
+  }
+
+  assertStatus(tournament, ['lobby', 'active'], 'No se pueden aceptar invitaciones con el torneo finalizado');
+  request.status = 'accepted';
+  const user = await userRepository.findByUid(playerId);
+  if (user) {
+    addPlayerToTournament(tournament, user);
+    recordAuditEvent(tournament, playerId, 'invitation_accepted', { userId: user.uid, displayName: user.displayName });
   }
 
   return save(tournament);
@@ -414,6 +428,19 @@ async function adjustRoundScores(tournamentId, organizerId, roundId, delta) {
   return save(tournament);
 }
 
+async function adjustTournamentScores(tournamentId, organizerId, delta) {
+  const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
+  assertStatus(tournament, ['lobby', 'active', 'review'], 'No se puede modificar un torneo finalizado');
+  const parsedDelta = parseInt(delta, 10);
+  if (!Number.isFinite(parsedDelta) || parsedDelta === 0) throw ApiError.badRequest('Ajuste invalido');
+
+  for (const player of tournament.players || []) {
+    setManualTotalScore(tournament, player, Math.max(0, (player.score || 0) + parsedDelta));
+  }
+  recordAuditEvent(tournament, organizerId, 'tournament_scores_adjusted', { delta: parsedDelta });
+  return save(tournament);
+}
+
 async function applyRoundChanges(tournamentId, organizerId, roundId, changes) {
   const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
   const round = findRound(tournament, roundId);
@@ -582,9 +609,30 @@ async function finishRound(tournamentId, organizerId, roundId, data) {
 async function updateTournamentSettings(tournamentId, organizerId, data) {
   const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
   assertStatus(tournament, ['lobby', 'active', 'review'], 'No se puede modificar un torneo finalizado');
+
+  const nextMin = data.minPlayers !== undefined ? data.minPlayers : tournament.minPlayers;
+  const nextMax = data.maxPlayers !== undefined ? data.maxPlayers : tournament.maxPlayers;
+  const effectiveMinimum = Math.max(tournament.isRanked ? 8 : 2, Number.isFinite(Number(nextMin)) ? Number(nextMin) : 0);
+  if (nextMin !== null && nextMax !== null && nextMin !== undefined && nextMax !== undefined && nextMin > nextMax) {
+    throw ApiError.badRequest('El minimo no puede superar el maximo de jugadores');
+  }
+  if (nextMax !== null && nextMax !== undefined && nextMax < effectiveMinimum) {
+    throw ApiError.badRequest(`El maximo debe ser al menos ${effectiveMinimum} jugadores`);
+  }
+  if (nextMax !== null && nextMax !== undefined && nextMax < tournament.players.length) {
+    throw ApiError.badRequest(`El maximo no puede ser menor que los ${tournament.players.length} jugadores inscritos`);
+  }
+
   if (data.pairingMethod) tournament.pairingMethod = data.pairingMethod;
   if (data.tableMode) tournament.tableMode = data.tableMode;
   if (data.bannerUrl !== undefined) tournament.bannerUrl = data.bannerUrl || '';
+  if (data.scheduledStartAt !== undefined) tournament.scheduledStartAt = data.scheduledStartAt || null;
+  if (data.minPlayers !== undefined) tournament.minPlayers = data.minPlayers;
+  if (data.maxPlayers !== undefined) tournament.maxPlayers = data.maxPlayers;
+  if (data.totalRounds !== undefined) {
+    if (tournament.status !== 'lobby') throw ApiError.badRequest('Las rondas de un torneo activo se ajustan con agregar o quitar ronda');
+    tournament.totalRounds = data.totalRounds;
+  }
   if (data.roundDuration !== undefined) {
     tournament.roundDuration = normalizeRoundDuration(data.roundDuration);
     const openRound = currentOpenRound(tournament);
@@ -592,6 +640,80 @@ async function updateTournamentSettings(tournamentId, organizerId, data) {
   }
   recordAuditEvent(tournament, organizerId, 'tournament_settings_updated', data);
   return save(tournament);
+}
+
+async function addRound(tournamentId, organizerId) {
+  const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
+  assertStatus(tournament, ['active', 'review'], 'Solo se pueden agregar rondas a un torneo activo');
+  if (tournament.totalRounds >= 20) throw ApiError.badRequest('El torneo ya tiene el maximo de 20 rondas');
+
+  const before = tournament.totalRounds;
+  tournament.totalRounds += 1;
+
+  if (tournament.status === 'review') {
+    const nextRoundNumber = nextRoundNumberForTournament(tournament);
+    tournament.status = 'active';
+    tournament.currentRound = nextRoundNumber;
+    tournament.rounds.push(createPendingRound(tournament, nextRoundNumber));
+  }
+
+  recordAuditEvent(tournament, organizerId, 'round_added', {
+    before,
+    after: tournament.totalRounds,
+  });
+  return save(tournament);
+}
+
+async function removeRound(tournamentId, organizerId) {
+  const tournament = await loadTournamentForOrganizer(tournamentId, organizerId);
+  assertStatus(tournament, ['active'], 'Solo se pueden quitar rondas de un torneo activo');
+  if (tournament.totalRounds <= 1) throw ApiError.badRequest('El torneo debe tener al menos una ronda');
+
+  const before = tournament.totalRounds;
+  const openRound = currentOpenRound(tournament);
+
+  if (tournament.totalRounds > (tournament.currentRound || 0)) {
+    tournament.totalRounds -= 1;
+  } else if (openRound?.status === 'pending' && openRound.number === tournament.totalRounds) {
+    tournament.rounds = tournament.rounds.filter(round => round.id !== openRound.id);
+    tournament.totalRounds -= 1;
+    tournament.currentRound = Math.max(1, lastRoundNumber(tournament));
+    if ((tournament.rounds || []).length && tournament.rounds.every(round => round.status === 'finished')) {
+      tournament.status = 'review';
+    }
+  } else {
+    throw ApiError.badRequest('No hay rondas futuras o pendientes para quitar');
+  }
+
+  recordAuditEvent(tournament, organizerId, 'round_removed', {
+    before,
+    after: tournament.totalRounds,
+  });
+  return save(tournament);
+}
+
+async function deleteTournament(tournamentId, organizerId, data = {}) {
+  const tournament = await loadTournamentForOrganizerOwner(tournamentId, organizerId);
+  await authService.verifyPassword(organizerId, data.password);
+
+  const deletedAt = now();
+  recordAuditEvent(tournament, organizerId, 'tournament_deleted', {
+    deletedAt,
+    reason: data.reason || '',
+  });
+  const deletionSnapshot = JSON.parse(JSON.stringify({
+    ...tournament,
+    deletionSnapshot: null,
+  }));
+
+  tournament.deletedAt = deletedAt;
+  tournament.deletedBy = organizerId;
+  tournament.deletionReason = data.reason || '';
+  tournament.deletionSnapshot = deletionSnapshot;
+
+  const saved = await save(tournament);
+  if (tournament.isRanked) await rebuildOrganizerRanking(tournament.organizerId);
+  return saved;
 }
 
 async function addTable(tournamentId, organizerId, roundId) {
@@ -881,6 +1003,7 @@ function addPlayerToTournament(tournament, user) {
   assertPlayerLimitAvailable(tournament);
   const player = playerEntry(user);
   tournament.players.push(player);
+  clearPendingInvitationsForPlayer(tournament, player.userId);
   if (tournament.status === 'active') {
     const round = currentOpenRound(tournament);
     if (round) {
@@ -896,6 +1019,14 @@ function addPlayerToTournament(tournament, user) {
         eliminated: false,
         startScore: 0,
       });
+    }
+  }
+}
+
+function clearPendingInvitationsForPlayer(tournament, userId) {
+  for (const request of tournament.joinRequests || []) {
+    if (request.userId === userId && request.status === 'pending' && request.type === 'invite') {
+      request.status = 'accepted';
     }
   }
 }
@@ -933,6 +1064,10 @@ function normalizeTournament(tournament) {
   tournament.appeals = tournament.appeals || [];
   tournament.prizes = tournament.prizes || [];
   tournament.rankingDeltas = tournament.rankingDeltas || [];
+  tournament.deletedAt = tournament.deletedAt || null;
+  tournament.deletedBy = tournament.deletedBy || '';
+  tournament.deletionReason = tournament.deletionReason || '';
+  tournament.deletionSnapshot = tournament.deletionSnapshot || null;
   for (const round of tournament.rounds) {
     round.timeLimitMinutes = round.timeLimitMinutes ?? tournament.roundDuration;
     round.totalPausedMs = round.totalPausedMs || 0;
@@ -960,7 +1095,7 @@ function normalizeTournament(tournament) {
 function normalizeRoundDuration(value) {
   const parsed = parseInt(value, 10);
   if (Number.isNaN(parsed)) return 0;
-  return Math.min(240, Math.max(0, parsed));
+  return Math.min(9999, Math.max(0, parsed));
 }
 
 function assertTablesEditable(round, message) {
@@ -1124,9 +1259,13 @@ function prepareNextRound(tournament) {
   }
 
   tournament.currentRound += 1;
+  tournament.rounds.push(createPendingRound(tournament, tournament.currentRound));
+}
+
+function createPendingRound(tournament, roundNumber) {
   const nextTables = generateRound(
     tournament.players,
-    tournament.currentRound,
+    roundNumber,
     tournament.pairingMethod || 'snake',
     tournament.tableMode || 'multi'
   );
@@ -1145,9 +1284,9 @@ function prepareNextRound(tournament) {
       startScore: player.score || 0,
     }));
   nextTables.push(createBenchTable(disqualifiedPlayers));
-  tournament.rounds.push({
+  return {
     id: createId(),
-    number: tournament.currentRound,
+    number: roundNumber,
     tables: nextTables,
     startTime: null,
     endTime: null,
@@ -1156,7 +1295,18 @@ function prepareNextRound(tournament) {
     totalPausedMs: 0,
     tableEditingUnlocked: false,
     status: 'pending',
-  });
+  };
+}
+
+function lastRoundNumber(tournament) {
+  const numbers = (tournament.rounds || [])
+    .map(round => Number(round.number))
+    .filter(Number.isFinite);
+  return numbers.length ? Math.max(...numbers) : 0;
+}
+
+function nextRoundNumberForTournament(tournament) {
+  return Math.max(Number(tournament.currentRound) || 0, lastRoundNumber(tournament)) + 1;
 }
 
 function disqualifyPlayer(tournament, player) {
@@ -1333,10 +1483,14 @@ module.exports = {
   handleJoinRequest,
   startTournament,
   listOrganizerPlayerSuggestions,
+  addRound,
+  removeRound,
+  deleteTournament,
   replaceRoundTables,
   updateTablePlayer,
   adjustTableScores,
   adjustRoundScores,
+  adjustTournamentScores,
   applyRoundChanges,
   activateRound,
   pauseRound,
