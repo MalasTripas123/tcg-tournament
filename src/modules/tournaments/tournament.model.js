@@ -124,6 +124,7 @@ const appealSchema = new mongoose.Schema({
 const tournamentSchema = new mongoose.Schema({
   _id: { type: String, required: true },
   name: { type: String, required: true, trim: true },
+  bannerUrl: { type: String, default: '', trim: true },
   organizerId: { type: String, required: true },
   organizerName: { type: String, required: true },
   organizerUsername: { type: String, default: '' },

@@ -47,6 +47,7 @@ async function createTournament(data, organizerId) {
 
   return tournamentRepository.createTournament({
     name: data.name,
+    bannerUrl: data.bannerUrl || '',
     organizerId,
     organizerName: organizer.displayName,
     organizerUsername: organizer.username,
@@ -583,6 +584,7 @@ async function updateTournamentSettings(tournamentId, organizerId, data) {
   assertStatus(tournament, ['lobby', 'active', 'review'], 'No se puede modificar un torneo finalizado');
   if (data.pairingMethod) tournament.pairingMethod = data.pairingMethod;
   if (data.tableMode) tournament.tableMode = data.tableMode;
+  if (data.bannerUrl !== undefined) tournament.bannerUrl = data.bannerUrl || '';
   if (data.roundDuration !== undefined) {
     tournament.roundDuration = normalizeRoundDuration(data.roundDuration);
     const openRound = currentOpenRound(tournament);

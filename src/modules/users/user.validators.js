@@ -18,6 +18,10 @@ function validateInvitationPolicy(req) {
   if (req.body.showPlayedTournaments !== undefined) {
     body.showPlayedTournaments = !!req.body.showPlayedTournaments;
   }
+  if (req.body.bannerUrl !== undefined) {
+    if (typeof req.body.bannerUrl !== 'string') throw ApiError.badRequest('URL de banner invalida');
+    body.bannerUrl = req.body.bannerUrl.trim().slice(0, 600);
+  }
   if (!Object.keys(body).length) throw ApiError.badRequest('No hay preferencias para actualizar');
   return { body };
 }

@@ -27,6 +27,11 @@ const userSchema = new mongoose.Schema({
     required: true,
     trim: true,
   },
+  bannerUrl: {
+    type: String,
+    default: '',
+    trim: true,
+  },
   role: {
     type: String,
     enum: ['player', 'organizer'],

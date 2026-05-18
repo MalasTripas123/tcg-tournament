@@ -93,6 +93,7 @@ function validateCreateTournament(req) {
   return {
     body: {
       name: asString(req.body.name, 'Nombre', 140),
+      bannerUrl: optionalString(req.body.bannerUrl, 600),
       scheduledStartAt: optionalTimestamp(req.body.scheduledStartAt),
       totalRounds: asInt(req.body.totalRounds, 'Rondas', 1, 20),
       roundDuration: asInt(req.body.roundDuration, 'Duracion', 0, 240, 50),
@@ -151,6 +152,7 @@ function validateTournamentSettings(req) {
     body.tableMode = req.body.tableMode;
   }
   if (req.body.roundDuration !== undefined) body.roundDuration = asInt(req.body.roundDuration, 'Duracion', 0, 240);
+  if (req.body.bannerUrl !== undefined) body.bannerUrl = optionalString(req.body.bannerUrl, 600);
   if (!Object.keys(body).length) throw ApiError.badRequest('No hay cambios para aplicar');
   return { body };
 }

@@ -65,13 +65,24 @@
     .card-accent-gold  { border-left: 3px solid var(--gold); }
     .organizer-link { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0 0 0.65rem; padding: 0; border: 0; background: transparent; color: var(--gold); font-family: 'Rajdhani', sans-serif; font-size: 1rem; font-weight: 700; cursor: pointer; text-decoration: none; }
     .organizer-link:hover { color: #ffe66d; text-decoration: underline; }
-    .tournament-card { display: flex; flex-direction: column; gap: 0.28rem; color: inherit; text-decoration: none; cursor: pointer; transition: border-color 0.2s, transform 0.15s, background 0.2s; padding: 0.85rem 1rem; overflow: hidden; }
+    .card.tournament-card { display: flex; flex-direction: column; gap: 0.28rem; color: inherit; text-decoration: none; cursor: pointer; transition: border-color 0.2s, transform 0.15s, background 0.2s; padding: 0; overflow: hidden; }
     .tournament-card:hover { border-color: var(--border-glow); transform: translateY(-2px); background: rgba(139,124,246,0.04); }
-    .tournament-card-row { padding: 0; border-bottom: 0; color: var(--text-muted); font-size: 0.82rem; line-height: 1.22; }
-    .tournament-card-tags { display: flex; align-items: center; gap: 0.38rem; flex-wrap: wrap; margin-bottom: 0.1rem; }
+    .tournament-card-row { padding: 0 1rem; border-bottom: 0; color: var(--text-muted); font-size: 0.82rem; line-height: 1.22; }
+    .tournament-card-tags { display: flex; align-items: center; gap: 0.38rem; flex-wrap: wrap; margin: 0.85rem 0 0.1rem; }
+    .tournament-card-banner + .tournament-card-tags { margin-top: 0; }
     .tournament-card-title { color: var(--text-primary); font-family: 'Cinzel', serif; font-size: 0.95rem; font-weight: 700; line-height: 1.25; margin-bottom: 0.08rem; }
     .tournament-card-muted { color: var(--text-hint); }
-    .tournament-card-visibility { color: var(--accent); font-weight: 700; }
+    .tournament-card-visibility { color: var(--accent); font-weight: 700; padding-bottom: 0.85rem; }
+    .tournament-banner, .profile-banner { width: 100%; overflow: hidden; background: var(--bg-elevated); border: 1px solid rgba(255,255,255,0.06); }
+    .tournament-banner img, .profile-banner img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .tournament-card-banner { align-self: stretch; flex: 0 0 auto; height: 88px; margin: 0 0 0.45rem; border-width: 0 0 1px; border-radius: 12px 12px 0 0; }
+    .tournament-hero-banner { height: clamp(150px, 24vw, 260px); margin: -1.5rem -1.5rem 1.1rem; border-width: 0 0 1px; border-radius: 12px 12px 0 0; }
+    .tournament-hero-banner.standalone-banner { margin: 0; border: 1px solid var(--border); border-radius: 12px; }
+    .profile-hero { padding: 0; overflow: hidden; }
+    .profile-banner { height: clamp(140px, 24vw, 230px); border-width: 0 0 1px; border-radius: 12px 12px 0 0; }
+    .profile-hero-body { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; padding: 1.5rem; }
+    .banner-url-control { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-top: 0.85rem; }
+    .banner-url-control .input { flex: 1 1 240px; min-width: 0; }
 
     .phase-card { background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 12px; padding: 1rem 1.25rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .phase-card.phase-active { border-left-color: var(--success); box-shadow: 0 0 0 1px rgba(34,197,94,0.08); }
@@ -240,6 +251,10 @@
       .header-auth .nav-link span { display: none; }
       .header-search-dropdown { width: 100%; }
       .card { padding: 1rem; }
+      .tournament-hero-banner { margin: -1rem -1rem 1rem; height: clamp(120px, 36vw, 190px); }
+      .tournament-hero-banner.standalone-banner { margin: 0; }
+      .profile-hero-body { padding: 1rem; gap: 1rem; }
+      .profile-banner { height: clamp(120px, 36vw, 190px); }
       .modal { padding: 1.25rem; }
       .organizer-layout { grid-template-columns: 1fr; }
       .player-panel-score-row { grid-template-columns: 1fr; }

@@ -45,6 +45,9 @@ async function updatePreferences(userId, data) {
   if (data.showPlayedTournaments !== undefined) {
     user = await userRepository.updateProfileVisibility(userId, data.showPlayedTournaments);
   }
+  if (data.bannerUrl !== undefined) {
+    user = await userRepository.updateProfileBanner(userId, data.bannerUrl);
+  }
   return user;
 }
 

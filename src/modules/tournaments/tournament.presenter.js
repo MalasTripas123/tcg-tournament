@@ -16,6 +16,7 @@ function presentTournament(tournament, viewer = null) {
   return {
     id: tournamentId(tournament),
     name: tournament.name,
+    bannerUrl: tournament.bannerUrl || '',
     organizerId: tournament.organizerId,
     organizerName: tournament.organizerName,
     organizerUsername: tournament.organizerUsername || '',

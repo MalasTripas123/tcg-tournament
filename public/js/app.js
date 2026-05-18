@@ -484,6 +484,30 @@ function tournamentVisibilityLabel(visibility) {
   })[visibility || 'public'] || 'Publico';
 }
 
+function renderImageBanner(url, className, alt = '') {
+  const cleanUrl = String(url || '').trim();
+  if (!cleanUrl) return '';
+  return `<div class="${className}">
+    <img src="${escHtml(cleanUrl)}" alt="${escHtml(alt)}" loading="lazy" onerror="this.parentElement.style.display='none'" />
+  </div>`;
+}
+
+function renderTournamentBanner(t, extraClass = '') {
+  return renderImageBanner(t?.bannerUrl, `tournament-banner ${extraClass}`.trim(), t?.name || 'Banner del torneo');
+}
+
+function renderProfileBanner(user) {
+  return renderImageBanner(user?.bannerUrl, 'profile-banner', user?.displayName || 'Banner del perfil');
+}
+
+function renderTournamentBannerControl(t) {
+  if (!isTournamentManager(t) || t.status === 'finished') return '';
+  return `<div class="banner-url-control">
+    <input id="tournament-banner-url" class="input" type="url" value="${escHtml(t.bannerUrl || '')}" placeholder="URL de banner del torneo" />
+    <button class="btn btn-outline btn-sm" onclick="updateTournamentBanner('${jsAttr(t.id)}')">Guardar banner</button>
+  </div>`;
+}
+
 function tournamentPlayerLimitText(t) {
   const min = t.minimumPlayers || (t.isRanked ? 8 : 2);
   const max = t.maxPlayers || null;
@@ -749,6 +773,7 @@ function renderTournamentHomeCard(t) {
   const status = statusMap[t.status] || statusMap.lobby;
   const isOrg = isTournamentManager(t);
   return `<a class="card tournament-card" href="${tournamentHref(t.id)}" onclick="tournamentLinkClick(event,'${jsAttr(t.id)}')">
+    ${renderTournamentBanner(t, 'tournament-card-banner')}
     <div class="tournament-card-row tournament-card-tags">
       ${t.isRanked ? '<span class="badge badge-gold">Rankeado</span>' : '<span class="badge badge-gray">Normal</span>'}
       <span class="badge ${status.badge}">${status.label}</span>
@@ -787,6 +812,8 @@ function handleCreateTournament() {
     limitsToggle.checked = false;
     togglePlayerLimitInputs(false);
   }
+  const bannerInput = document.getElementById('t-banner-url');
+  if (bannerInput) bannerInput.value = '';
   navigate('create', null);
 }
 
@@ -978,6 +1005,7 @@ function validatePrizesBeforeSubmit() {
 async function submitCreateTournament(e) {
   e.preventDefault();
   const name       = document.getElementById('t-name').value.trim();
+  const bannerUrl = document.getElementById('t-banner-url')?.value.trim() || '';
   const totalRounds = parseInt(document.getElementById('t-rounds').value);
   const roundDuration = parseInt(document.getElementById('t-duration').value);
   const visibility = document.getElementById('t-visibility').value;
@@ -1002,7 +1030,7 @@ async function submitCreateTournament(e) {
     distribution,
   }));
   try {
-    const t = await api('/api/tournaments', { method: 'POST', body: { name, scheduledStartAt, totalRounds, roundDuration, minPlayers, maxPlayers, prizes, visibility, pairingMethod, tableMode } });
+    const t = await api('/api/tournaments', { method: 'POST', body: { name, bannerUrl, scheduledStartAt, totalRounds, roundDuration, minPlayers, maxPlayers, prizes, visibility, pairingMethod, tableMode } });
     App.tournaments.unshift(t);
     toast('Torneo "' + t.name + '" creado', 'success');
     renderLobby(t); navigate('lobby', t.id);
@@ -1017,6 +1045,7 @@ function renderLobby(t) {
   const visLabel = { public: '🌐 Público', approval: '⏳ Con aprobación', private: '🔒 Privado' };
   document.getElementById('lobby-header').innerHTML = `
     <div class="card card-accent-left">
+      ${renderTournamentBanner(t, 'tournament-hero-banner')}
       <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
         <div>
           <h2 style="font-size:1.3rem;font-weight:700;margin:0 0 0.4rem;">${escHtml(t.name)}</h2>
@@ -1033,6 +1062,7 @@ function renderLobby(t) {
         </div>
         <span class="badge badge-gray">Lobby</span>
       </div>
+      ${renderTournamentBannerControl(t)}
       ${t.prizes.length ? `<div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);">
         <span class="section-title">Premios</span>
         <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">${t.prizes.map(renderPrize).join('')}</div><div style="display:none;">${t.prizes.map(p => `<div class="prize-card">
@@ -1238,6 +1268,20 @@ async function updateTableMode(tid, tableMode) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+async function updateTournamentBanner(tid) {
+  const bannerUrl = document.getElementById('tournament-banner-url')?.value.trim() || '';
+  try {
+    await flushAllPendingChanges(tid);
+    const t = await api('/api/tournaments/' + tid + '/settings', { method: 'PATCH', body: { bannerUrl } });
+    _updateTournamentCache(t);
+    if (App.currentTournamentId === tid) {
+      if (App.currentView === 'lobby') renderLobby(t);
+      else renderOrganizerView(t);
+    }
+    toast('Banner del torneo actualizado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 async function addTable(tid, rid) {
   try {
     await flushAllPendingChanges(tid, rid);
@@ -1422,6 +1466,7 @@ function renderFinalResults(t, editable = false) {
     <div style="max-width:980px;margin:0 auto;">
       <a class="btn btn-ghost btn-sm" href="/" onclick="navigateLink(event,'home')" style="margin-bottom:1.5rem;">Inicio</a>
       <div class="card card-accent-gold" style="margin-bottom:1.5rem;">
+        ${renderTournamentBanner(t, 'tournament-hero-banner')}
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
           <div>
             <span class="badge badge-purple" style="margin-bottom:0.75rem;">Resultados finales</span>
@@ -1510,6 +1555,7 @@ function renderOrganizerView(t) {
 
   document.getElementById('organizer-content').innerHTML = `
     <div style="display:grid;grid-template-columns:1fr;gap:1.5rem;">
+      ${renderTournamentBanner(t, 'tournament-hero-banner standalone-banner')}
 
       <!-- ENCABEZADO -->
       <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
@@ -1562,6 +1608,7 @@ function renderOrganizerView(t) {
           <button class="btn btn-ghost btn-sm" onclick="refreshTournament()">↻</button>
         </div>
       </div>
+      ${renderTournamentBannerControl(t)}
 
       <div class="phase-card phase-${phase.key}">
         <div>
@@ -2472,6 +2519,7 @@ function renderSpectatorView(t) {
     <div style="max-width:960px;margin:0 auto;">
       <a class="btn btn-ghost btn-sm" href="/" onclick="navigateLink(event,'home')" style="margin-bottom:1.5rem;">← Volver</a>
       <div class="card card-accent-left" style="margin-bottom:1.5rem;">
+        ${renderTournamentBanner(t, 'tournament-hero-banner')}
         <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">
           <div>
             <h1 style="font-size:1.5rem;font-weight:700;margin:0 0 0.5rem;">${escHtml(t.name)}</h1>
@@ -2867,8 +2915,10 @@ function renderProfileView({ user, organizedActive, organizedFinished, moderatin
   invitedTo         = invitedTo.map(normalize);
   document.getElementById('profile-content').innerHTML = `
     <a class="btn btn-ghost btn-sm" href="/" onclick="navigateLink(event,'home')" style="margin-bottom:1.5rem;">← Inicio</a>
-    <div class="card" style="display:flex;align-items:center;gap:1.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
-      <div class="player-avatar" style="width:64px;height:64px;font-size:1.4rem;border:2px solid var(--accent);">${initials(user.displayName)}</div>
+    <div class="card profile-hero" style="margin-bottom:1.5rem;">
+      ${renderProfileBanner(user)}
+      <div class="profile-hero-body">
+        <div class="player-avatar" style="width:64px;height:64px;font-size:1.4rem;border:2px solid var(--accent);">${initials(user.displayName)}</div>
       <div style="flex:1;">
         <h1 style="font-size:1.4rem;font-weight:700;margin:0 0 0.35rem;">${escHtml(user.displayName)}</h1>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
@@ -2881,8 +2931,8 @@ function renderProfileView({ user, organizedActive, organizedFinished, moderatin
       <button class="btn btn-ghost btn-sm" onclick="copyLink('${jsAttr(profileHref(user))}')" title="Copiar link del perfil">
         🔗 Copiar link
       </button>
+      </div>
     </div>
-
     <div class="card" style="margin-bottom:1.5rem;">
       <span class="section-title">Resumen publico</span>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:0.75rem;">
@@ -2905,6 +2955,13 @@ function renderProfileView({ user, organizedActive, organizedFinished, moderatin
           <input type="checkbox" ${user.showPlayedTournaments !== false ? 'checked' : ''} onchange="updatePlayedVisibility(this.checked)" />
           Mostrar publicamente mis torneos jugados
         </label>
+        <div style="margin-top:1rem;">
+          <label class="section-title" style="margin-bottom:0.55rem;">Banner de perfil</label>
+          <div class="banner-url-control">
+            <input id="profile-banner-url" class="input" type="url" value="${escHtml(user.bannerUrl || '')}" placeholder="URL de imagen para tu banner" />
+            <button class="btn btn-outline btn-sm" onclick="updateProfileBannerUrl()">Guardar banner</button>
+          </div>
+        </div>
       </div>` : ''}
 
     ${isOwn && invitedTo.length ? `
@@ -3089,6 +3146,17 @@ async function updatePlayedVisibility(showPlayedTournaments) {
     App.currentUser = r.user;
     renderHeader();
     toast('Privacidad actualizada', 'success');
+    openProfile(profileSlug(App.currentUser));
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function updateProfileBannerUrl() {
+  const bannerUrl = document.getElementById('profile-banner-url')?.value.trim() || '';
+  try {
+    const r = await api('/api/users/me/preferences', { method: 'PATCH', body: { bannerUrl } });
+    App.currentUser = r.user;
+    renderHeader();
+    toast('Banner de perfil actualizado', 'success');
     openProfile(profileSlug(App.currentUser));
   } catch(e) { toast(e.message, 'error'); }
 }
