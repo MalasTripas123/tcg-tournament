@@ -76,8 +76,8 @@
     .tournament-banner, .profile-banner { width: 100%; overflow: hidden; background: var(--bg-elevated); border: 1px solid rgba(255,255,255,0.06); }
     .tournament-banner img, .profile-banner img { display: block; width: 100%; height: 100%; object-fit: cover; }
     .tournament-card-banner { align-self: stretch; flex: 0 0 auto; height: 88px; margin: 0 0 0.45rem; border-width: 0 0 1px; border-radius: 12px 12px 0 0; }
-    .tournament-hero-banner { height: clamp(150px, 24vw, 260px); margin: -1.5rem -1.5rem 1.1rem; border-width: 0 0 1px; border-radius: 12px 12px 0 0; }
-    .tournament-hero-banner.standalone-banner { margin: 0; border: 1px solid var(--border); border-radius: 12px; }
+    .tournament-hero-banner { width: calc(100% + 3rem); height: clamp(150px, 24vw, 260px); margin: -1.5rem -1.5rem 1.1rem; border-width: 0 0 1px; border-radius: 12px 12px 0 0; }
+    .tournament-hero-banner.standalone-banner { width: 100%; margin: 0; border: 1px solid var(--border); border-radius: 12px; }
     .profile-hero { padding: 0; overflow: hidden; }
     .profile-banner { height: clamp(140px, 24vw, 230px); border-width: 0 0 1px; border-radius: 12px 12px 0 0; }
     .profile-hero-body { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; padding: 1.5rem; }
@@ -251,8 +251,8 @@
       .header-auth .nav-link span { display: none; }
       .header-search-dropdown { width: 100%; }
       .card { padding: 1rem; }
-      .tournament-hero-banner { margin: -1rem -1rem 1rem; height: clamp(120px, 36vw, 190px); }
-      .tournament-hero-banner.standalone-banner { margin: 0; }
+      .tournament-hero-banner { width: calc(100% + 2rem); margin: -1rem -1rem 1rem; height: clamp(120px, 36vw, 190px); }
+      .tournament-hero-banner.standalone-banner { width: 100%; margin: 0; }
       .profile-hero-body { padding: 1rem; gap: 1rem; }
       .profile-banner { height: clamp(120px, 36vw, 190px); }
       .modal { padding: 1.25rem; }
