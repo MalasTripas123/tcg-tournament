@@ -792,7 +792,7 @@ function showLoginModal() {
     <div style="text-align:center;margin-bottom:1.5rem;">
       <div style="font-size:2rem;margin-bottom:0.5rem;">♦</div>
       <h2 style="font-size:1.3rem;margin:0 0 0.25rem;font-weight:700;">Iniciar Sesión</h2>
-      <p style="color:var(--text-muted);font-size:0.85rem;margin:0;">Prueba: <code style="color:var(--accent)">admin_store</code> / <code style="color:var(--accent)">1234</code></p>
+      <p style="color:var(--text-muted);font-size:0.85rem;margin:0;">x<code style="color:var(--accent)">x</code>x<code style="color:var(--accent)">x</code></p>
     </div>
     <div style="display:flex;flex-direction:column;gap:1rem;">
       <input id="login-user" class="input" type="text" placeholder="Usuario" />

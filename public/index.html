@@ -34,7 +34,7 @@
   <!-- VIEW: HOME -->
   <div id="view-home" class="view">
     <div style="text-align:center;padding:2.5rem 0 3rem;">
-      <span class="badge badge-purple" style="margin-bottom:1rem;">⚔ MVP v2.0</span>
+      <span class="badge badge-purple" style="margin-bottom:1rem;">⚔ Beta v1.0</span>
       <h1 style="font-size:clamp(2rem,5vw,3.2rem);font-weight:700;letter-spacing:0.05em;margin:0.75rem 0 1rem;line-height:1.1;">
         Gestiona tus<br /><span style="color:var(--accent)">Torneos TCG</span>
       </h1>
@@ -45,7 +45,7 @@
       <div class="home-toolbar">
         <div>
           <span class="section-title" style="margin:0;border:none;padding:0;">Torneos</span>
-          <div class="home-toolbar-note">Solo torneos publicos o con aprobacion.</div>
+          <!-- <div class="home-toolbar-note">Solo torneos publicos o con aprobacion.</div> -->
         </div>
         <div class="home-filters">
           <input id="home-filter-name" class="input home-filter-input" placeholder="Filtrar por torneo u organizador..." oninput="updateHomeFilter('name', this.value)" />
@@ -84,7 +84,7 @@
       <form id="create-form" onsubmit="submitCreateTournament(event)">
         <div style="margin-bottom:1.25rem;">
           <label class="section-title">Nombre del Torneo</label>
-          <input id="t-name" class="input" type="text" placeholder="Ej: Torneo Semanal Dragon's Lair" required />
+          <input id="t-name" class="input" type="text" placeholder="Ej: Torneo Semanal" required />
         </div>
         <div style="margin-bottom:1.25rem;">
           <label class="section-title">Banner del Torneo</label>
@@ -101,7 +101,7 @@
               <option value="">Sin formato especifico</option>
             </select>
           </div>
-          <div style="font-size:0.78rem;color:var(--text-hint);margin-top:0.35rem;">Opcional. La lista viene desde la base de datos.</div>
+          <div style="font-size:0.78rem;color:var(--text-hint);margin-top:0.35rem;">Opcional.</div>
         </div>
         <div id="t-ranked-wrap" style="margin-bottom:1.25rem;display:none;">
           <label class="section-title">Tipo de torneo</label>
@@ -236,11 +236,13 @@
 <!-- FOOTER -->
 <footer style="background:var(--bg-card);border-top:1px solid var(--border);padding:1.25rem 1.5rem;">
   <div style="max-width:1200px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">
-    <span style="font-family:'Cinzel',serif;font-size:0.82rem;color:var(--text-hint);">♦ TCG Tournament — Tournament Manager MVP</span>
+    <span style="font-family:'Cinzel',serif;font-size:0.82rem;color:var(--text-hint);">♦ TCG Tournament — Tournament Manager</span>
+    <span style="font-size:0.78rem;color:var(--text-hint);">Para adquirir el servicio completo contactanos</span>
     <div style="display:flex;gap:1.5rem;">
-      <span style="font-size:0.78rem;color:var(--text-hint);">Commander-style pods</span>
-      <span style="font-size:0.78rem;color:var(--text-hint);">v2.0.0</span>
+      <span style="font-size:0.78rem;color:var(--text-hint);">TCG-Tournament</span>
+      <span style="font-size:0.78rem;color:var(--text-hint);">Beta v1.0</span>
     </div>
+    
   </div>
 </footer>
 
