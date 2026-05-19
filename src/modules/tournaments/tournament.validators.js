@@ -95,6 +95,10 @@ function validateCreateTournament(req) {
     body: {
       name: asString(req.body.name, 'Nombre', 140),
       bannerUrl: optionalString(req.body.bannerUrl, 600),
+      gameId: optionalString(req.body.gameId, 120),
+      gameFormatId: optionalString(req.body.gameFormatId, 120),
+      locationId: optionalString(req.body.locationId, 140),
+      location: optionalString(req.body.location, 180),
       scheduledStartAt: optionalTimestamp(req.body.scheduledStartAt),
       totalRounds: asInt(req.body.totalRounds, 'Rondas', 1, 20),
       roundDuration: asInt(req.body.roundDuration, 'Duracion', 0, MAX_ROUND_DURATION_MINUTES, 50),
@@ -161,6 +165,10 @@ function validateTournamentSettings(req) {
     throw ApiError.badRequest('El minimo no puede superar el maximo de jugadores');
   }
   if (req.body.bannerUrl !== undefined) body.bannerUrl = optionalString(req.body.bannerUrl, 600);
+  if (req.body.gameId !== undefined) body.gameId = optionalString(req.body.gameId, 120);
+  if (req.body.gameFormatId !== undefined) body.gameFormatId = optionalString(req.body.gameFormatId, 120);
+  if (req.body.locationId !== undefined) body.locationId = optionalString(req.body.locationId, 140);
+  if (req.body.location !== undefined) body.location = optionalString(req.body.location, 180);
   if (!Object.keys(body).length) throw ApiError.badRequest('No hay cambios para aplicar');
   return { body };
 }

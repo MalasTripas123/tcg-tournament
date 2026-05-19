@@ -11,7 +11,7 @@ function createHelmetMiddleware() {
         styleSrc: ["'self'", "'unsafe-inline'", 'fonts.googleapis.com', 'cdn.tailwindcss.com'],
         fontSrc: ["'self'", 'fonts.gstatic.com'],
         connectSrc: ["'self'"],
-        imgSrc: ["'self'", 'data:', 'https:'],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
       },
     },
   });

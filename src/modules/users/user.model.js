@@ -32,6 +32,10 @@ const userSchema = new mongoose.Schema({
     default: '',
     trim: true,
   },
+  avatarDataUrl: {
+    type: String,
+    default: '',
+  },
   role: {
     type: String,
     enum: ['player', 'organizer'],

@@ -1,0 +1,114 @@
+[
+  {
+    "id": "magic-the-gathering",
+    "name": "Magic: The Gathering",
+    "aliases": ["MTG", "Magic"],
+    "formats": ["Standard", "Pioneer", "Modern", "Legacy", "Vintage", "Commander", "Pauper", "Draft", "Sealed"],
+    "sortOrder": 10
+  },
+  {
+    "id": "yu-gi-oh",
+    "name": "Yu-Gi-Oh!",
+    "aliases": ["YGO", "YuGiOh"],
+    "formats": ["Advanced", "Traditional", "Time Wizard", "Speed Duel", "Goat", "Edison"],
+    "sortOrder": 20
+  },
+  {
+    "id": "pokemon-tcg",
+    "name": "Pokemon TCG",
+    "aliases": ["Pokemon"],
+    "formats": ["Standard", "Expanded", "Unlimited", "GLC", "Draft", "Sealed"],
+    "sortOrder": 30
+  },
+  {
+    "id": "one-piece-card-game",
+    "name": "One Piece Card Game",
+    "aliases": ["One Piece TCG", "OPCG"],
+    "formats": ["Constructed", "Sealed", "Buddy Battle"],
+    "sortOrder": 40
+  },
+  {
+    "id": "digimon-card-game",
+    "name": "Digimon Card Game",
+    "aliases": ["Digimon TCG"],
+    "formats": ["Constructed", "Sealed", "Ultimate Cup"],
+    "sortOrder": 50
+  },
+  {
+    "id": "disney-lorcana",
+    "name": "Disney Lorcana",
+    "aliases": ["Lorcana"],
+    "formats": ["Core Constructed", "Draft", "Sealed"],
+    "sortOrder": 60
+  },
+  {
+    "id": "flesh-and-blood",
+    "name": "Flesh and Blood",
+    "aliases": ["FAB"],
+    "formats": ["Classic Constructed", "Blitz", "Commoner", "Draft", "Sealed"],
+    "sortOrder": 70
+  },
+  {
+    "id": "star-wars-unlimited",
+    "name": "Star Wars: Unlimited",
+    "aliases": ["SWU"],
+    "formats": ["Premier", "Draft", "Sealed", "Twin Suns"],
+    "sortOrder": 80
+  },
+  {
+    "id": "dragon-ball-super-card-game",
+    "name": "Dragon Ball Super Card Game",
+    "aliases": ["DBS"],
+    "formats": ["Constructed", "Sealed"],
+    "sortOrder": 90
+  },
+  {
+    "id": "union-arena",
+    "name": "Union Arena",
+    "aliases": [],
+    "formats": ["Standard", "Sealed"],
+    "sortOrder": 100
+  },
+  {
+    "id": "cardfight-vanguard",
+    "name": "Cardfight!! Vanguard",
+    "aliases": ["Vanguard"],
+    "formats": ["Standard", "V-Premium", "Premium"],
+    "sortOrder": 110
+  },
+  {
+    "id": "weiss-schwarz",
+    "name": "Weiss Schwarz",
+    "aliases": [],
+    "formats": ["Neo-Standard", "Title Cup", "Sealed"],
+    "sortOrder": 120
+  },
+  {
+    "id": "universus",
+    "name": "Universus",
+    "aliases": ["UniVersus"],
+    "formats": ["Standard", "Retro"],
+    "sortOrder": 130
+  },
+  {
+    "id": "altered-tcg",
+    "name": "Altered TCG",
+    "aliases": ["Altered"],
+    "formats": ["Constructed", "Draft", "Sealed"],
+    "sortOrder": 140
+  },
+  {
+    "id": "grand-archive",
+    "name": "Grand Archive",
+    "aliases": [],
+    "formats": ["Standard", "Draft", "Sealed"],
+    "sortOrder": 150
+  },
+  {
+    "id": "shadowverse-evolve",
+    "name": "Shadowverse: Evolve",
+    "aliases": ["Shadowverse"],
+    "formats": ["Constructed", "Sealed"],
+    "sortOrder": 160
+  }
+]

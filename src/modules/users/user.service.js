@@ -7,6 +7,7 @@ const { presentTournamentList } = require('../tournaments/tournament.presenter')
 const SALT_ROUNDS = 12;
 
 async function seedUsers() {
+  return; // Desactivar creación de usuarios de prueba después del primer inicio
   const count = await userRepository.countUsers();
   if (count > 0) return;
 
@@ -47,6 +48,9 @@ async function updatePreferences(userId, data) {
   }
   if (data.bannerUrl !== undefined) {
     user = await userRepository.updateProfileBanner(userId, data.bannerUrl);
+  }
+  if (data.avatarDataUrl !== undefined) {
+    user = await userRepository.updateProfileAvatar(userId, data.avatarDataUrl);
   }
   return user;
 }

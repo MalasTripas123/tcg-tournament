@@ -28,6 +28,14 @@ Tests unitarios:
 npm test
 ```
 
+Catalogo de juegos y formatos:
+
+```bash
+npm run seed:games
+```
+
+El script sincroniza `data/game-catalog.json` contra la base configurada en `MONGODB_URI`.
+
 ## Variables de entorno
 
 Crear `.env` en la raiz:

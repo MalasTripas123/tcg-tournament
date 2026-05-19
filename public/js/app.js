@@ -16,6 +16,9 @@ const App = {
   homeFilters: { name: '', visibility: '', ranked: false, sort: 'created-desc' },
   homeFinishedExpanded: false,
   currentProfileUser: null,
+  gameCatalog: [],
+  profileAvatarDraft: '',
+  locationSearchTimers: {},
 };
 
 const AUTOSAVE_DELAY_MS = 750;
@@ -25,6 +28,7 @@ const AUTOSAVE_DELAY_MS = 750;
 // ═══════════════════════════════════════════════════════════════
 async function init() {
   await fetchCurrentUser();
+  await loadGameCatalog();
   renderHeader();
   await loadTournaments();
   await resolveRoute(location.pathname);
@@ -55,6 +59,7 @@ async function resolveRoute(pathname) {
     App.prizes = [];
     document.getElementById('prizes-list').innerHTML = '';
     _showView('create');
+    prepareCreateTournamentForm();
     history.replaceState({ view: 'create' }, '', '/create');
     return;
   }
@@ -129,6 +134,15 @@ async function api(url, opts = {}) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Error del servidor');
   return data;
+}
+
+async function loadGameCatalog() {
+  try {
+    App.gameCatalog = await api('/api/games');
+  } catch {
+    App.gameCatalog = [];
+  }
+  populateCreateGameControls();
 }
 
 // Cambios frecuentes de ronda: se aplican localmente y se guardan en lote.
@@ -366,7 +380,7 @@ function renderHeader() {
     const slug = profileSlug(App.currentUser);
     el.innerHTML = `
       <a class="nav-link" href="${profileHref(slug)}" onclick="profileLinkClick(event,'${jsAttr(slug)}')" style="display:flex;align-items:center;gap:0.4rem;">
-        <div class="player-avatar" style="width:26px;height:26px;font-size:0.6rem;">${initials(App.currentUser.displayName)}</div>
+        ${avatarHtml(App.currentUser, 'width:26px;height:26px;font-size:0.6rem;')}
         <span style="font-size:0.85rem;">${escHtml(App.currentUser.displayName)}</span>
         ${App.currentUser.role === 'organizer' ? '<span class="badge badge-gold">ORG</span>' : ''}
       </a>
@@ -434,6 +448,145 @@ function anonymousBadge(item, compact = false) {
 
 function tableModeLabel(mode) {
   return mode === 'versus' ? 'Versus' : 'Multi';
+}
+
+function gameById(gameId) {
+  return (App.gameCatalog || []).find(game => game.id === gameId);
+}
+
+function renderGameOptions(selected = '', selectedName = '') {
+  const catalog = App.gameCatalog || [];
+  const selectedInCatalog = !selected || catalog.some(game => game.id === selected);
+  const extra = selected && !selectedInCatalog
+    ? `<option value="${escHtml(selected)}" selected>${escHtml(selectedName || selected)}</option>`
+    : '';
+  return `<option value="">Sin juego especifico</option>${extra}${catalog.map(game => `
+    <option value="${escHtml(game.id)}" ${game.id === selected ? 'selected' : ''}>${escHtml(game.name)}</option>
+  `).join('')}`;
+}
+
+function renderFormatOptions(gameId, selected = '', selectedName = '') {
+  const game = gameById(gameId);
+  const formats = game?.formats || [];
+  const selectedInCatalog = !selected || formats.some(format => format.id === selected);
+  const extra = selected && !selectedInCatalog
+    ? `<option value="${escHtml(selected)}" selected>${escHtml(selectedName || selected)}</option>`
+    : '';
+  return `<option value="">Sin formato especifico</option>${extra}${formats.map(format => `
+    <option value="${escHtml(format.id)}" ${format.id === selected ? 'selected' : ''}>${escHtml(format.name)}</option>
+  `).join('')}`;
+}
+
+function updateFormatOptions(gameSelectId, formatSelectId, selected = '') {
+  const gameId = document.getElementById(gameSelectId)?.value || '';
+  const format = document.getElementById(formatSelectId);
+  if (!format) return;
+  format.innerHTML = renderFormatOptions(gameId, selected);
+  format.disabled = !gameId || !(gameById(gameId)?.formats || []).length;
+  if (!gameId) format.value = '';
+}
+
+function populateCreateGameControls() {
+  const gameSelect = document.getElementById('t-game');
+  const formatSelect = document.getElementById('t-format');
+  if (!gameSelect || !formatSelect) return;
+  const selectedGame = gameSelect.value || '';
+  const selectedFormat = formatSelect.value || '';
+  gameSelect.innerHTML = renderGameOptions(selectedGame);
+  gameSelect.value = selectedGame && gameById(selectedGame) ? selectedGame : '';
+  updateFormatOptions('t-game', 't-format', selectedFormat);
+}
+
+function tournamentGameText(t) {
+  if (!t?.gameName) return 'Juego no especificado';
+  return t.gameName + (t.gameFormatName ? ' - ' + t.gameFormatName : '');
+}
+
+function tournamentLocationText(t) {
+  return t?.location ? t.location : 'Sin ubicacion definida';
+}
+
+function locationControlIds(scope) {
+  if (scope === 'settings') {
+    return {
+      input: 'tournament-settings-location',
+      hidden: 'tournament-settings-location-id',
+      dropdown: 'tournament-settings-location-dropdown',
+    };
+  }
+  return {
+    input: 't-location',
+    hidden: 't-location-id',
+    dropdown: 't-location-dropdown',
+  };
+}
+
+function setLocationControl(scope, location = null) {
+  const ids = locationControlIds(scope);
+  const input = document.getElementById(ids.input);
+  const hidden = document.getElementById(ids.hidden);
+  if (input) input.value = location?.label || '';
+  if (hidden) hidden.value = location?.id || '';
+  hideLocationDropdown(scope);
+}
+
+function selectedLocationPayload(scope) {
+  const ids = locationControlIds(scope);
+  const label = document.getElementById(ids.input)?.value.trim() || '';
+  const locationId = document.getElementById(ids.hidden)?.value.trim() || '';
+  return { label, locationId };
+}
+
+function requireValidLocationSelection(scope) {
+  const { label, locationId } = selectedLocationPayload(scope);
+  if (label && !locationId) {
+    toast('Selecciona una ubicacion valida desde las sugerencias', 'error');
+    return false;
+  }
+  return true;
+}
+
+function handleLocationSearch(scope, q) {
+  const ids = locationControlIds(scope);
+  const hidden = document.getElementById(ids.hidden);
+  if (hidden) hidden.value = '';
+  clearTimeout(App.locationSearchTimers[scope]);
+  if (String(q || '').trim().length < 2) {
+    hideLocationDropdown(scope);
+    return;
+  }
+  App.locationSearchTimers[scope] = setTimeout(() => searchLocations(scope, q), 250);
+}
+
+async function searchLocations(scope, q) {
+  const ids = locationControlIds(scope);
+  const dropdown = document.getElementById(ids.dropdown);
+  if (!dropdown) return;
+  try {
+    const locations = await api('/api/locations/search?q=' + encodeURIComponent(q));
+    dropdown.innerHTML = locations.length ? locations.map(location => `
+      <button type="button" class="search-dropdown-item" style="width:100%;text-align:left;background:transparent;color:inherit;border:0;"
+              onmousedown="selectLocation('${scope}','${jsAttr(location.id)}','${jsAttr(location.label)}')">
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:0.9rem;">${escHtml(location.locality)}</div>
+          <div style="font-size:0.78rem;color:var(--text-muted);">${escHtml(location.region)} - ${escHtml(location.country)}</div>
+        </div>
+        <span class="badge badge-gray">${escHtml(location.countryCode)}</span>
+      </button>`).join('') : '<div class="search-dropdown-empty">Sin ubicaciones encontradas</div>';
+    dropdown.style.display = 'block';
+  } catch {
+    dropdown.innerHTML = '<div class="search-dropdown-empty">No se pudo buscar ubicaciones</div>';
+    dropdown.style.display = 'block';
+  }
+}
+
+function selectLocation(scope, id, label) {
+  setLocationControl(scope, { id, label });
+}
+
+function hideLocationDropdown(scope) {
+  const dropdown = document.getElementById(locationControlIds(scope).dropdown);
+  if (dropdown) dropdown.style.display = 'none';
 }
 
 function isTournamentManager(t) {
@@ -507,6 +660,16 @@ function renderImageBanner(url, className, alt = '') {
   if (!cleanUrl) return '';
   return `<div class="${className}">
     <img src="${escHtml(cleanUrl)}" alt="${escHtml(alt)}" loading="lazy" onerror="this.parentElement.style.display='none'" />
+  </div>`;
+}
+
+function avatarHtml(person, style = '') {
+  const cleanUrl = String(person?.avatarDataUrl || '').trim();
+  const name = person?.displayName || '';
+  return `<div class="player-avatar" ${style ? `style="${style}"` : ''}>
+    ${cleanUrl
+      ? `<img src="${escHtml(cleanUrl)}" alt="${escHtml(name || 'Avatar')}" loading="lazy" onerror="this.remove()" />`
+      : escHtml(initials(name))}
   </div>`;
 }
 
@@ -809,6 +972,9 @@ function homeVisibleTournaments(list) {
       t.name,
       t.organizerName,
       t.organizerUsername,
+      t.gameName,
+      t.gameFormatName,
+      t.location,
     ].some(value => String(value || '').toLowerCase().includes(nameQuery)))
     .filter(t => !filters.visibility || (t.visibility || 'public') === filters.visibility)
     .filter(t => !filters.ranked || !!t.isRanked)
@@ -891,6 +1057,7 @@ function renderTournamentHomeCard(t) {
     </div>
     <div class="tournament-card-row tournament-card-title">${escHtml(t.name)}</div>
     <div class="tournament-card-row tournament-card-muted">Organizador: ${escHtml(t.organizerName || 'Sin organizador')}</div>
+    <div class="tournament-card-row tournament-card-muted">${escHtml(tournamentGameText(t))}</div>
     <div class="tournament-card-row tournament-card-muted">${formatDateTime(t.scheduledStartAt)}</div>
     <div class="tournament-card-row">${tournamentPlayerLimitText(t)}</div>
     <div class="tournament-card-row">Rondas: ${t.currentRound || 0}/${t.totalRounds} - ${durationLabel(t.roundDuration)}</div>
@@ -917,6 +1084,11 @@ function handleCreateTournament() {
   if (!App.currentUser) { toast('Debes iniciar sesión para crear un torneo', 'error'); showLoginModal(); return; }
   App.prizes = [];
   document.getElementById('prizes-list').innerHTML = '';
+  prepareCreateTournamentForm();
+  navigate('create', null);
+}
+
+function prepareCreateTournamentForm() {
   const limitsToggle = document.getElementById('t-has-player-limits');
   if (limitsToggle) {
     limitsToggle.checked = false;
@@ -924,7 +1096,19 @@ function handleCreateTournament() {
   }
   const bannerInput = document.getElementById('t-banner-url');
   if (bannerInput) bannerInput.value = '';
-  navigate('create', null);
+  const startToggle = document.getElementById('t-has-start');
+  if (startToggle) {
+    startToggle.checked = false;
+    toggleStartDateInput(false);
+  }
+  const locationInput = document.getElementById('t-location');
+  if (locationInput) locationInput.value = '';
+  const locationIdInput = document.getElementById('t-location-id');
+  if (locationIdInput) locationIdInput.value = '';
+  hideLocationDropdown('create');
+  const gameSelect = document.getElementById('t-game');
+  if (gameSelect) gameSelect.value = '';
+  populateCreateGameControls();
 }
 
 function addPrize(type) {
@@ -1121,6 +1305,9 @@ async function submitCreateTournament(e) {
   const visibility = document.getElementById('t-visibility').value;
   const pairingMethod = document.getElementById('t-pairing').value;
   const tableMode = document.getElementById('t-table-mode').value;
+  const gameId = document.getElementById('t-game')?.value || '';
+  const gameFormatId = document.getElementById('t-format')?.value || '';
+  const { label: location, locationId } = selectedLocationPayload('create');
   const scheduledStartAt = document.getElementById('t-has-start')?.checked ? readDateTimeLocal('t-start') : null;
   const hasPlayerLimits = document.getElementById('t-has-player-limits')?.checked;
   const minPlayers = hasPlayerLimits ? (document.getElementById('t-min-players').value || null) : null;
@@ -1130,6 +1317,7 @@ async function submitCreateTournament(e) {
     toast('El minimo no puede superar el maximo de jugadores', 'error');
     return;
   }
+  if (!requireValidLocationSelection('create')) return;
   if (!validatePrizesBeforeSubmit()) return;
   const prizes = App.prizes.map(({ type, value, imageUrl, creditCount, creditValue, distribution }) => ({
     type,
@@ -1140,7 +1328,7 @@ async function submitCreateTournament(e) {
     distribution,
   }));
   try {
-    const t = await api('/api/tournaments', { method: 'POST', body: { name, bannerUrl, scheduledStartAt, totalRounds, roundDuration, minPlayers, maxPlayers, prizes, visibility, pairingMethod, tableMode } });
+    const t = await api('/api/tournaments', { method: 'POST', body: { name, bannerUrl, gameId, gameFormatId, locationId, location, scheduledStartAt, totalRounds, roundDuration, minPlayers, maxPlayers, prizes, visibility, pairingMethod, tableMode } });
     App.tournaments.unshift(t);
     toast('Torneo "' + t.name + '" creado', 'success');
     renderLobby(t); navigate('lobby', t.id);
@@ -1162,6 +1350,8 @@ function renderLobby(t) {
           <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;font-size:0.85rem;color:var(--text-muted);">
             <span>🔄 ${t.totalRounds} rondas · ${durationLabel(t.roundDuration)}</span>
             <span>${visLabel[t.visibility] || '🌐 Público'}</span>
+            <span>${escHtml(tournamentGameText(t))}</span>
+            <span>${escHtml(tournamentLocationText(t))}</span>
             <span>${tournamentPlayerLimitText(t)}</span>
             <span>${pairingLabel[t.pairingMethod] || 'Snake'}</span>
             <span>${tableModeLabel(t.tableMode)}</span>
@@ -1205,7 +1395,7 @@ function renderLobbyRequests(t) {
       <div style="display:flex;flex-direction:column;gap:0.5rem;">
         ${pending.map(r => `
           <div class="card-elevated" style="display:flex;align-items:center;gap:0.75rem;padding:0.65rem 1rem;">
-            <div class="player-avatar">${initials(r.displayName)}</div>
+            ${avatarHtml(r)}
             <span style="flex:1;font-weight:600;">${escHtml(r.displayName)}</span>
             <button class="btn btn-success btn-sm" onclick="handleJoinRequest('${t.id}','${r.userId}','accept')">Aceptar</button>
             <button class="btn btn-danger btn-sm" onclick="handleJoinRequest('${t.id}','${r.userId}','reject')">Rechazar</button>
@@ -1223,7 +1413,7 @@ function renderLobbyPlayers(t) {
     c.innerHTML = t.players.map((p, i) => `
       <div class="card-elevated" style="display:flex;align-items:center;gap:0.75rem;padding:0.65rem 1rem;">
         <span style="font-family:'Cinzel',serif;font-size:0.78rem;color:var(--text-hint);min-width:1.5rem;">#${i+1}</span>
-        <div class="player-avatar">${initials(p.displayName)}</div>
+        ${avatarHtml(p)}
         <span style="flex:1;font-weight:600;">${escHtml(p.displayName)}</span>
         ${anonymousBadge(p)}
         <button class="btn btn-danger btn-sm" onclick="removePlayerFromLobby('${jsAttr(p.userId)}')">Quitar</button>
@@ -1245,6 +1435,7 @@ async function renderLobbyPlayerSuggestions(t) {
         ${suggestions.map(s => `
           <button type="button" class="btn btn-ghost btn-sm" style="display:flex;align-items:center;gap:0.45rem;"
                   onclick="addPlayerSuggestionToLobby('${s.isAnonymous ? 'anonymous' : 'user'}','${jsAttr(s.userId)}','${jsAttr(s.anonymousName || s.displayName)}')">
+            ${avatarHtml(s, 'width:22px;height:22px;font-size:0.5rem;')}
             <span>${escHtml(s.displayName)}</span>
             ${anonymousBadge(s)}
             <span style="font-size:0.72rem;color:var(--text-muted);">${s.tournamentsPlayed} torneos</span>
@@ -1277,7 +1468,7 @@ async function doSearchPlayers(q) {
       dd.innerHTML = results.map(u => {
         const already = enrolled.includes(u.id);
         return `<div class="search-dropdown-item" onclick="${already ? '' : `addPlayerToLobby('${u.id}')`}" style="${already ? 'opacity:0.5;cursor:default;' : ''}">
-          <div class="player-avatar" style="width:28px;height:28px;font-size:0.6rem;">${initials(u.displayName)}</div>
+          ${avatarHtml(u, 'width:28px;height:28px;font-size:0.6rem;')}
           <div style="flex:1;">
             <div style="font-weight:600;font-size:0.9rem;">${escHtml(u.displayName)}</div>
             <div style="font-size:0.78rem;color:var(--text-muted);">@${escHtml(u.username)}</div>
@@ -1416,6 +1607,33 @@ function openTournamentSettingsModal(tid) {
       </div>
 
       <div class="settings-section">
+        <div class="settings-grid">
+          <label>
+            <span class="settings-label">Juego</span>
+            <select id="tournament-settings-game" class="input" onchange="updateFormatOptions('tournament-settings-game','tournament-settings-format')">
+              ${renderGameOptions(t.gameId || '', t.gameName || '')}
+            </select>
+          </label>
+          <label>
+            <span class="settings-label">Formato</span>
+            <select id="tournament-settings-format" class="input" ${t.gameId ? '' : 'disabled'}>
+              ${renderFormatOptions(t.gameId || '', t.gameFormatId || '', t.gameFormatName || '')}
+            </select>
+          </label>
+        </div>
+        <label>
+          <span class="settings-label">Ubicacion</span>
+          <div style="position:relative;">
+            <input id="tournament-settings-location" class="input" type="text" maxlength="180" value="${escHtml(t.location || '')}" placeholder="Buscar comuna, region o pais"
+                   oninput="handleLocationSearch('settings', this.value)" onblur="setTimeout(()=>hideLocationDropdown('settings'),200)" autocomplete="off" />
+            <input id="tournament-settings-location-id" type="hidden" value="${escHtml(t.locationId || '')}" />
+            <div id="tournament-settings-location-dropdown" class="search-dropdown" style="display:none;"></div>
+          </div>
+          <div class="settings-note">Para cambiarla, selecciona una sugerencia valida. Borra el campo para dejarlo sin ubicacion.</div>
+        </label>
+      </div>
+
+      <div class="settings-section">
         <label class="settings-check">
           <input id="tournament-settings-has-start" type="checkbox" ${hasStart ? 'checked' : ''} onchange="toggleTournamentStartDateInput(this.checked)" />
           <span>Programar fecha y hora de inicio</span>
@@ -1518,6 +1736,10 @@ async function saveTournamentSettings(tid) {
 
   const body = {
     bannerUrl: document.getElementById('tournament-settings-banner')?.value.trim() || '',
+    gameId: document.getElementById('tournament-settings-game')?.value || '',
+    gameFormatId: document.getElementById('tournament-settings-format')?.value || '',
+    locationId: selectedLocationPayload('settings').locationId,
+    location: selectedLocationPayload('settings').label,
     scheduledStartAt: hasStart ? readDateTimeLocal('tournament-settings-start') : null,
     minPlayers,
     maxPlayers,
@@ -1527,6 +1749,7 @@ async function saveTournamentSettings(tid) {
   };
   const totalRounds = readNullableIntInput('tournament-settings-total-rounds');
   if (totalRounds !== null) body.totalRounds = totalRounds;
+  if (!requireValidLocationSelection('settings')) return;
 
   try {
     await flushAllPendingChanges(tid);
@@ -1835,6 +2058,8 @@ function renderFinalResults(t, editable = false) {
             <div style="display:flex;gap:0.5rem;flex-wrap:wrap;color:var(--text-muted);font-size:0.88rem;">
               <span>${t.players.length} jugadores</span>
               <span>${finishedRounds.length}/${t.totalRounds} rondas</span>
+              <span>${escHtml(tournamentGameText(t))}</span>
+              <span>${escHtml(tournamentLocationText(t))}</span>
               <span>${t.isRanked ? 'Torneo oficial' : 'Torneo normal'}</span>
               ${viewerTournamentRoleBadge(t)}
             </div>
@@ -1928,6 +2153,8 @@ function renderOrganizerView(t) {
             <span class="badge badge-gray">${tableModeLabel(t.tableMode)}</span>
             ${viewerTournamentRoleBadge(t)}
             ${currentRound ? `<span id="autosave-status-${currentRound.id}" class="${autosaveStatusClass(t.id, currentRound.id)}">${autosaveStatusLabel(t.id, currentRound.id)}</span>` : ''}
+            <span style="font-size:0.85rem;color:var(--text-muted);">${escHtml(tournamentGameText(t))}</span>
+            <span style="font-size:0.85rem;color:var(--text-muted);">${escHtml(tournamentLocationText(t))}</span>
             <span style="font-size:0.85rem;color:var(--text-muted);">${formatDateTime(t.scheduledStartAt)}</span>
             ${t.isRanked ? '<span class="badge badge-gold">⭐ Rankeado</span>' : ''}
             <span style="font-size:0.85rem;color:var(--text-muted);">Ronda ${t.currentRound} / ${t.totalRounds}</span>
@@ -2098,7 +2325,7 @@ function renderOrgTables(t, round) {
                ondragleave="event.currentTarget.classList.remove('drag-over-player')"
                ondrop="onDropToPlayer(event,'${t.id}','${round.id}','${table.id}','${p.userId}')"` : ''}>
           ${tablesEditable && !finished ? '<span style="cursor:grab;color:var(--text-hint);margin-right:2px;font-size:1rem;line-height:1;">::</span>' : ''}
-          <div class="player-avatar">${initials(p.displayName)}</div>
+          ${avatarHtml(p)}
           <span style="flex:1;font-weight:600;font-size:0.92rem;">${escHtml(p.displayName)}</span>
           ${anonymousBadge(p)}
           ${cardBoxes(p)}
@@ -2409,7 +2636,7 @@ function renderPlayerControlPanel(t) {
   const playerRows = !t.players.length ? '<p style="color:var(--text-hint);font-size:0.9rem;">Sin jugadores.</p>' : `
     ${t.players.map(p => `
       <div class="card-elevated ${p.eliminatedFromTournament ? 'player-row disqualified' : ''}" style="display:flex;align-items:center;gap:0.65rem;padding:0.55rem 0.7rem;flex-wrap:wrap;">
-        <div class="player-avatar" style="width:24px;height:24px;font-size:0.55rem;">${initials(p.displayName)}</div>
+        ${avatarHtml(p, 'width:24px;height:24px;font-size:0.55rem;')}
         <span style="flex:1;font-weight:600;font-size:0.86rem;${p.eliminatedFromTournament?'text-decoration:line-through;':''}">${escHtml(p.displayName)}</span>
         ${anonymousBadge(p)}
         <div class="discipline-control">
@@ -2494,7 +2721,7 @@ function renderPlayerControlPanelV2(t) {
     <div class="card-elevated player-panel-card ${p.eliminatedFromTournament ? 'disqualified' : ''}">
       <div class="player-panel-row">
         <div style="display:flex;align-items:center;gap:0.6rem;min-width:0;">
-          <div class="player-avatar" style="width:28px;height:28px;font-size:0.6rem;">${initials(p.displayName)}</div>
+          ${avatarHtml(p, 'width:28px;height:28px;font-size:0.6rem;')}
           ${playerProfileLink(p, 'player-panel-name')}
           ${anonymousBadge(p)}
         </div>
@@ -2572,7 +2799,7 @@ function renderModeratorPanel(t) {
     </div>
     ${activeModerators.length ? activeModerators.map(m => `
       <div class="card-elevated" style="display:flex;align-items:center;gap:0.65rem;padding:0.55rem 0.7rem;">
-        <div class="player-avatar" style="width:24px;height:24px;font-size:0.55rem;">${initials(m.displayName)}</div>
+        ${avatarHtml(m, 'width:24px;height:24px;font-size:0.55rem;')}
         <span style="flex:1;font-weight:600;font-size:0.86rem;">${escHtml(m.displayName)}</span>
         <button class="btn btn-danger btn-sm" onclick="removeModerator('${t.id}','${m.userId}')">Quitar</button>
       </div>`).join('') : '<p style="color:var(--text-hint);font-size:0.9rem;">Sin moderadores activos.</p>'}
@@ -2622,7 +2849,7 @@ async function doSearchOrgPlayers(tid, q) {
     dd.innerHTML = results.length ? results.map(u => {
       const already = enrolled.includes(u.id);
       return `<div class="search-dropdown-item" onclick="${already ? '' : `addPlayerFromOrganizer('${tid}','${u.id}')`}" style="${already ? 'opacity:0.5;cursor:default;' : ''}">
-        <div class="player-avatar" style="width:28px;height:28px;font-size:0.6rem;">${initials(u.displayName)}</div>
+        ${avatarHtml(u, 'width:28px;height:28px;font-size:0.6rem;')}
         <div style="flex:1;">
           <div style="font-weight:600;font-size:0.9rem;">${escHtml(u.displayName)}</div>
           <div style="font-size:0.78rem;color:var(--text-muted);">@${escHtml(u.username)}</div>
@@ -2930,6 +3157,8 @@ function renderSpectatorView(t) {
                 ${t.status==='active'?'En Curso':t.status==='finished'?'Finalizado':'Lobby'}
               </span>
               ${t.isRanked?'<span class="badge badge-gold">⭐ Rankeado</span>':''}
+              <span class="badge badge-gray">${escHtml(tournamentGameText(t))}</span>
+              ${t.location ? `<span class="badge badge-gray">${escHtml(t.location)}</span>` : ''}
               <span class="badge badge-gray">Min. ${t.minimumPlayers || (t.isRanked ? 8 : 2)} jugadores</span>
               ${viewerTournamentRoleBadge(t)}
               <a href="${profileHref(t.organizerUsername || t.organizerId)}" onclick="profileLinkClick(event,'${jsAttr(t.organizerUsername || t.organizerId)}')" style="font-size:0.82rem;color:var(--accent);cursor:pointer;">por ${escHtml(t.organizerName)}</a>
@@ -2996,7 +3225,7 @@ function renderSpectatorView(t) {
                   </div>
                   ${table.players.map(p => `
                     <div class="player-row ${p.eliminated?'eliminated':''}">
-                      <div class="player-avatar">${initials(p.displayName)}</div>
+                      ${avatarHtml(p)}
                       <span style="flex:1;font-weight:600;">${escHtml(p.displayName)}</span>
                       ${anonymousBadge(p)}
                       ${cardBoxes(p)}
@@ -3211,7 +3440,7 @@ function renderStandings(players, tid, editable, rounds) {
           <td style="font-family:'Cinzel',serif;font-size:0.82rem;">${icons[i]||i+1}</td>
           <td style="max-width:120px;">
             <div style="display:flex;align-items:center;gap:0.4rem;">
-              <div class="player-avatar" style="width:20px;height:20px;font-size:0.5rem;flex-shrink:0;">${initials(p.displayName)}</div>
+              ${avatarHtml(p, 'width:20px;height:20px;font-size:0.5rem;flex-shrink:0;')}
               <span style="font-size:0.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(p.displayName)}</span>
               ${anonymousBadge(p)}
             </div>
@@ -3280,7 +3509,7 @@ function renderStandingsV2(players, tid, editable, rounds) {
           <td class="standings-rank-cell">${places[i] || i + 1}</td>
           <td class="standings-player-cell">
             <div class="standings-player">
-              <div class="player-avatar" style="width:20px;height:20px;font-size:0.5rem;flex-shrink:0;">${initials(p.displayName)}</div>
+              ${avatarHtml(p, 'width:20px;height:20px;font-size:0.5rem;flex-shrink:0;')}
               ${playerProfileLink(p, 'standings-player-link')}
               ${anonymousBadge(p, true)}
             </div>
@@ -3340,7 +3569,7 @@ function renderProfileView({ user, organizedActive, organizedFinished, moderatin
     <div class="card profile-hero" style="margin-bottom:1.5rem;">
       ${renderProfileBanner(user)}
       <div class="profile-hero-body">
-        <div class="player-avatar" style="width:64px;height:64px;font-size:1.4rem;border:2px solid var(--accent);">${initials(user.displayName)}</div>
+        ${avatarHtml(user, 'width:64px;height:64px;font-size:1.4rem;border:2px solid var(--accent);')}
       <div style="flex:1;">
         <h1 style="font-size:1.4rem;font-weight:700;margin:0 0 0.35rem;">${escHtml(user.displayName)}</h1>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
@@ -3539,6 +3768,7 @@ function invitationRow(t) {
 function openProfileSettingsModal() {
   const user = App.currentProfileUser || App.currentUser;
   if (!user || App.currentUser?.id !== user.id) return;
+  App.profileAvatarDraft = user.avatarDataUrl || '';
   showModal(`
     <div class="settings-modal">
       <div class="settings-modal-header">
@@ -3565,6 +3795,17 @@ function openProfileSettingsModal() {
         <label class="settings-label" for="profile-settings-banner">Banner de perfil</label>
         <input id="profile-settings-banner" class="input" type="url" value="${escHtml(user.bannerUrl || '')}" placeholder="URL de imagen para tu banner" />
       </div>
+      <div class="settings-section">
+        <span class="settings-label">Foto de perfil</span>
+        <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+          <div id="profile-avatar-preview">${avatarHtml(user, 'width:74px;height:74px;font-size:1.2rem;')}</div>
+          <div style="flex:1;min-width:220px;display:flex;flex-direction:column;gap:0.5rem;">
+            <input id="profile-settings-avatar" class="input" type="file" accept="image/png,image/jpeg,image/webp" onchange="handleProfileAvatarFile(this.files && this.files[0])" />
+            <div class="settings-note">Se guarda en la base de datos como imagen reducida a 400x400 px.</div>
+            <button class="btn btn-ghost btn-sm" type="button" style="align-self:flex-start;" onclick="clearProfileAvatar()">Quitar foto</button>
+          </div>
+        </div>
+      </div>
       <div class="settings-actions">
         <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
         <button class="btn btn-primary" onclick="saveProfileSettings()">Guardar cambios</button>
@@ -3572,14 +3813,79 @@ function openProfileSettingsModal() {
     </div>`);
 }
 
+function setProfileAvatarPreview() {
+  const preview = document.getElementById('profile-avatar-preview');
+  const user = App.currentProfileUser || App.currentUser || {};
+  if (preview) {
+    preview.innerHTML = avatarHtml({ ...user, avatarDataUrl: App.profileAvatarDraft }, 'width:74px;height:74px;font-size:1.2rem;');
+  }
+}
+
+async function handleProfileAvatarFile(file) {
+  if (!file) return;
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+    toast('Elige una imagen PNG, JPG o WebP', 'error');
+    return;
+  }
+  try {
+    App.profileAvatarDraft = await resizeAvatarImage(file);
+    setProfileAvatarPreview();
+    toast('Foto preparada', 'success');
+  } catch(e) {
+    toast(e.message || 'No se pudo procesar la foto', 'error');
+  }
+}
+
+function clearProfileAvatar() {
+  App.profileAvatarDraft = '';
+  const input = document.getElementById('profile-settings-avatar');
+  if (input) input.value = '';
+  setProfileAvatarPreview();
+}
+
+function resizeAvatarImage(file, size = 400, quality = 0.78) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#12121a';
+        ctx.fillRect(0, 0, size, size);
+        const scale = Math.max(size / img.width, size / img.height);
+        const drawWidth = img.width * scale;
+        const drawHeight = img.height * scale;
+        ctx.drawImage(img, (size - drawWidth) / 2, (size - drawHeight) / 2, drawWidth, drawHeight);
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        if (dataUrl.length > 450000) dataUrl = canvas.toDataURL('image/jpeg', 0.62);
+        if (dataUrl.length > 450000) throw new Error('La imagen sigue siendo demasiado pesada');
+        resolve(dataUrl);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.onerror = () => reject(new Error('No se pudo leer la imagen'));
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    reader.onload = () => { img.src = reader.result; };
+    reader.readAsDataURL(file);
+  });
+}
+
 async function saveProfileSettings() {
   const invitationPolicy = document.getElementById('profile-settings-invitation')?.value || 'manual';
   const showPlayedTournaments = !!document.getElementById('profile-settings-show-played')?.checked;
   const bannerUrl = document.getElementById('profile-settings-banner')?.value.trim() || '';
+  const body = { invitationPolicy, showPlayedTournaments, bannerUrl };
+  if (App.profileAvatarDraft !== ((App.currentProfileUser || App.currentUser)?.avatarDataUrl || '')) {
+    body.avatarDataUrl = App.profileAvatarDraft || '';
+  }
   try {
     const r = await api('/api/users/me/preferences', {
       method: 'PATCH',
-      body: { invitationPolicy, showPlayedTournaments, bannerUrl },
+      body,
     });
     App.currentUser = r.user;
     App.currentProfileUser = r.user;
@@ -3682,7 +3988,15 @@ function handleHeaderSearch(q) {
   const dd = document.getElementById('header-search-dropdown');
   if (q.length < 2) { dd.style.display='none'; return; }
   _hsTimeout = setTimeout(async () => {
-    const results = App.tournaments.filter(t => t.name.toLowerCase().includes(q.toLowerCase())).slice(0,6);
+    const query = q.toLowerCase();
+    const results = App.tournaments.filter(t => [
+      t.name,
+      t.organizerName,
+      t.organizerUsername,
+      t.gameName,
+      t.gameFormatName,
+      t.location,
+    ].some(value => String(value || '').toLowerCase().includes(query))).slice(0,6);
     let userResults = [];
     try { userResults = await api('/api/users/search?q=' + encodeURIComponent(q)); } catch {}
     dd.innerHTML = results.length
@@ -3697,7 +4011,7 @@ function handleHeaderSearch(q) {
     if (results.length || userResults.length) {
       const tournamentHtml = results.length ? '<div class="search-dropdown-empty" style="text-align:left;padding:0.45rem 0.75rem;">Torneos</div>' + dd.innerHTML : '';
       const usersHtml = userResults.slice(0,4).map(u => `<a class="search-dropdown-item" href="${profileHref(u)}" onclick="hideHeaderSearch();profileLinkClick(event,'${jsAttr(profileSlug(u))}')" style="text-decoration:none;color:inherit;">
-          <div class="player-avatar" style="width:28px;height:28px;font-size:0.6rem;">${initials(u.displayName)}</div>
+          ${avatarHtml(u, 'width:28px;height:28px;font-size:0.6rem;')}
           <div style="flex:1;">
             <div style="font-weight:600;font-size:0.88rem;">${escHtml(u.displayName)}</div>
             <div style="font-size:0.75rem;color:var(--text-muted);">@${escHtml(u.username)}</div>

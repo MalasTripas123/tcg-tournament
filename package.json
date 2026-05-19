@@ -7,6 +7,8 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "rebuild-rankings": "node scripts/rebuild-rankings.js",
+    "seed:games": "node scripts/seed-games.js",
+    "seed:locations": "node scripts/seed-locations.js",
     "test": "node --test"
   },
   "dependencies": {

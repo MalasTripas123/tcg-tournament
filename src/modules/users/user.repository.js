@@ -31,6 +31,13 @@ async function findByUsername(username) {
   return User.findOne({ username: username.toLowerCase().trim() }).lean();
 }
 
+async function findByUids(uids) {
+  const uniqueIds = [...new Set((uids || []).filter(Boolean))];
+  if (!uniqueIds.length) return [];
+  if (User.db.readyState !== 1) return [];
+  return User.find({ uid: { $in: uniqueIds } }).select('uid avatarDataUrl').lean();
+}
+
 async function searchUsers(query, limit = 10) {
   const q = String(query || '').trim();
   if (q.length < 2) return [];
@@ -68,6 +75,14 @@ async function updateProfileBanner(uid, bannerUrl) {
   return User.findOneAndUpdate(
     { uid },
     { $set: { bannerUrl: bannerUrl || '' } },
+    { new: true, runValidators: true }
+  ).lean();
+}
+
+async function updateProfileAvatar(uid, avatarDataUrl) {
+  return User.findOneAndUpdate(
+    { uid },
+    { $set: { avatarDataUrl: avatarDataUrl || '' } },
     { new: true, runValidators: true }
   ).lean();
 }
@@ -166,6 +181,7 @@ module.exports = {
   countUsers,
   insertUsers,
   findByUid,
+  findByUids,
   findByPublicId,
   findByUsername,
   searchUsers,
@@ -173,6 +189,7 @@ module.exports = {
   updateInvitationPolicy,
   updateProfileVisibility,
   updateProfileBanner,
+  updateProfileAvatar,
   replaceOrganizerRanking,
   findRankingByOrganizer,
 };

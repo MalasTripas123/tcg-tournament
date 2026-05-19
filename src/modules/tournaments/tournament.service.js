@@ -3,6 +3,8 @@ const { createId } = require('../../shared/utils/ids');
 const { now } = require('../../shared/utils/dates');
 const authService = require('../auth/auth.service');
 const userRepository = require('../users/user.repository');
+const gameRepository = require('../games/game.repository');
+const locationRepository = require('../locations/location.repository');
 const tournamentRepository = require('./tournament.repository');
 const policies = require('./tournament.policies');
 const { generateRound } = require('./domain/matchmaking');
@@ -24,7 +26,13 @@ async function listTournaments({ query, viewerId } = {}) {
   let tournaments = await tournamentRepository.findAll();
   if (query) {
     const q = String(query).toLowerCase();
-    tournaments = tournaments.filter(tournament => tournament.name.toLowerCase().includes(q));
+    tournaments = tournaments.filter(tournament => [
+      tournament.name,
+      tournament.organizerName,
+      tournament.gameName,
+      tournament.gameFormatName,
+      tournament.location,
+    ].some(value => String(value || '').toLowerCase().includes(q)));
   }
   return tournaments.filter(tournament => policies.canViewTournament(tournament, viewerId));
 }
@@ -34,7 +42,7 @@ async function getTournament(id, viewerId) {
   if (!policies.canViewTournament(tournament, viewerId)) {
     throw ApiError.forbidden('No puedes ver este torneo');
   }
-  return ensureRankingCurrent(tournament);
+  return attachUserAvatars(await ensureRankingCurrent(tournament));
 }
 
 async function createTournament(data, organizerId) {
@@ -45,10 +53,14 @@ async function createTournament(data, organizerId) {
   if (data.maxPlayers !== null && data.maxPlayers !== undefined && data.maxPlayers < effectiveMinimum) {
     throw ApiError.badRequest(`El maximo debe ser al menos ${effectiveMinimum} jugadores`);
   }
+  const gameSelection = await resolveGameSelection(data);
+  const locationSelection = await resolveLocationSelection(data);
 
   return tournamentRepository.createTournament({
     name: data.name,
     bannerUrl: data.bannerUrl || '',
+    ...gameSelection,
+    ...locationSelection,
     organizerId,
     organizerName: organizer.displayName,
     organizerUsername: organizer.username,
@@ -626,6 +638,12 @@ async function updateTournamentSettings(tournamentId, organizerId, data) {
   if (data.pairingMethod) tournament.pairingMethod = data.pairingMethod;
   if (data.tableMode) tournament.tableMode = data.tableMode;
   if (data.bannerUrl !== undefined) tournament.bannerUrl = data.bannerUrl || '';
+  if (data.gameId !== undefined || data.gameFormatId !== undefined) {
+    Object.assign(tournament, await resolveGameSelection(data, tournament));
+  }
+  if (data.locationId !== undefined || data.location !== undefined) {
+    Object.assign(tournament, await resolveLocationSelection(data, tournament));
+  }
   if (data.scheduledStartAt !== undefined) tournament.scheduledStartAt = data.scheduledStartAt || null;
   if (data.minPlayers !== undefined) tournament.minPlayers = data.minPlayers;
   if (data.maxPlayers !== undefined) tournament.maxPlayers = data.maxPlayers;
@@ -974,6 +992,77 @@ function playerEntry(user) {
   };
 }
 
+async function resolveGameSelection(data = {}, currentTournament = null) {
+  const hasGameChange = Object.prototype.hasOwnProperty.call(data, 'gameId');
+  const hasFormatChange = Object.prototype.hasOwnProperty.call(data, 'gameFormatId');
+  const nextGameId = hasGameChange ? data.gameId : (currentTournament?.gameId || '');
+  const nextFormatId = hasFormatChange ? data.gameFormatId : (currentTournament?.gameFormatId || '');
+
+  if (!nextGameId) {
+    return {
+      gameId: '',
+      gameName: '',
+      gameFormatId: '',
+      gameFormatName: '',
+    };
+  }
+
+  const game = await gameRepository.findById(nextGameId);
+  if (!game) throw ApiError.badRequest('Juego invalido');
+
+  let selectedFormat = null;
+  if (nextFormatId) {
+    selectedFormat = (game.formats || []).find(format => format.id === nextFormatId);
+    if (!selectedFormat) throw ApiError.badRequest('Formato invalido para este juego');
+  }
+
+  return {
+    gameId: game._id || game.id,
+    gameName: game.name,
+    gameFormatId: selectedFormat?.id || '',
+    gameFormatName: selectedFormat?.name || '',
+  };
+}
+
+async function resolveLocationSelection(data = {}, currentTournament = null) {
+  const hasLocationIdChange = Object.prototype.hasOwnProperty.call(data, 'locationId');
+  const hasLocationTextChange = Object.prototype.hasOwnProperty.call(data, 'location');
+  const nextLocationId = hasLocationIdChange ? data.locationId : (currentTournament?.locationId || '');
+  const nextLocationText = hasLocationTextChange ? data.location : (currentTournament?.location || '');
+
+  if (!nextLocationId) {
+    if (String(nextLocationText || '').trim()) {
+      throw ApiError.badRequest('Selecciona una ubicacion valida desde las sugerencias');
+    }
+    return emptyLocationSelection();
+  }
+
+  const location = await locationRepository.findById(nextLocationId);
+  if (!location) throw ApiError.badRequest('Ubicacion invalida');
+
+  return {
+    locationId: location._id || location.id,
+    location: location.label,
+    locationLocality: location.locality,
+    locationRegion: location.region,
+    locationCountry: location.country,
+    locationLat: location.lat ?? null,
+    locationLng: location.lng ?? null,
+  };
+}
+
+function emptyLocationSelection() {
+  return {
+    locationId: '',
+    location: '',
+    locationLocality: '',
+    locationRegion: '',
+    locationCountry: '',
+    locationLat: null,
+    locationLng: null,
+  };
+}
+
 function createJoinRequest(tournament, user) {
   tournament.joinRequests.push({
     userId: user.uid,
@@ -1052,6 +1141,17 @@ function assertPlayerLimitAvailable(tournament) {
 function normalizeTournament(tournament) {
   tournament.pairingMethod = tournament.pairingMethod || 'snake';
   tournament.tableMode = tournament.tableMode || 'multi';
+  tournament.gameId = tournament.gameId || '';
+  tournament.gameName = tournament.gameName || '';
+  tournament.gameFormatId = tournament.gameFormatId || '';
+  tournament.gameFormatName = tournament.gameFormatName || '';
+  tournament.locationId = tournament.locationId || '';
+  tournament.location = tournament.location || '';
+  tournament.locationLocality = tournament.locationLocality || '';
+  tournament.locationRegion = tournament.locationRegion || '';
+  tournament.locationCountry = tournament.locationCountry || '';
+  tournament.locationLat = tournament.locationLat ?? null;
+  tournament.locationLng = tournament.locationLng ?? null;
   tournament.roundDuration = normalizeRoundDuration(tournament.roundDuration);
   tournament.minPlayers = tournament.minPlayers ?? null;
   tournament.maxPlayers = tournament.maxPlayers ?? null;
@@ -1468,7 +1568,46 @@ async function ensureRankingCurrent(tournament) {
 }
 
 async function save(tournament) {
-  return tournamentRepository.saveTournament(tournament);
+  const saved = await tournamentRepository.saveTournament(tournament);
+  return attachUserAvatars(saved);
+}
+
+async function attachUserAvatars(tournament) {
+  if (!tournament || typeof userRepository.findByUids !== 'function') return tournament;
+  const userIds = new Set();
+  collectAvatarUserIds(tournament.players, userIds);
+  collectAvatarUserIds(tournament.joinRequests, userIds);
+  collectAvatarUserIds(tournament.moderators, userIds);
+  for (const round of tournament.rounds || []) {
+    for (const table of round.tables || []) {
+      collectAvatarUserIds(table.players, userIds);
+    }
+  }
+  if (!userIds.size) return tournament;
+
+  const users = await userRepository.findByUids([...userIds]);
+  const avatarByUserId = new Map(users.map(user => [user.uid, user.avatarDataUrl || '']));
+  applyAvatars(tournament.players, avatarByUserId);
+  applyAvatars(tournament.joinRequests, avatarByUserId);
+  applyAvatars(tournament.moderators, avatarByUserId);
+  for (const round of tournament.rounds || []) {
+    for (const table of round.tables || []) {
+      applyAvatars(table.players, avatarByUserId);
+    }
+  }
+  return tournament;
+}
+
+function collectAvatarUserIds(items = [], target) {
+  for (const item of items || []) {
+    if (item?.userId && !item.isAnonymous) target.add(item.userId);
+  }
+}
+
+function applyAvatars(items = [], avatarByUserId) {
+  for (const item of items || []) {
+    if (item?.userId && !item.isAnonymous) item.avatarDataUrl = avatarByUserId.get(item.userId) || '';
+  }
 }
 
 module.exports = {

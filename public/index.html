@@ -87,6 +87,28 @@
           <div style="font-size:0.78rem;color:var(--text-hint);margin-top:0.35rem;">Se mostrara en la tarjeta del inicio y al visitar el torneo.</div>
         </div>
         <div style="margin-bottom:1.25rem;">
+          <label class="section-title">Juego y formato</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;" class="two-col">
+            <select id="t-game" class="input" onchange="updateFormatOptions('t-game','t-format')">
+              <option value="">Sin juego especifico</option>
+            </select>
+            <select id="t-format" class="input" disabled>
+              <option value="">Sin formato especifico</option>
+            </select>
+          </div>
+          <div style="font-size:0.78rem;color:var(--text-hint);margin-top:0.35rem;">Opcional. La lista viene desde la base de datos.</div>
+        </div>
+        <div style="margin-bottom:1.25rem;">
+          <label class="section-title">Ubicacion</label>
+          <div style="position:relative;">
+            <input id="t-location" class="input" type="text" maxlength="180" placeholder="Ej: Las Condes, Region Metropolitana, Chile"
+                   oninput="handleLocationSearch('create', this.value)" onblur="setTimeout(()=>hideLocationDropdown('create'),200)" autocomplete="off" />
+            <input id="t-location-id" type="hidden" />
+            <div id="t-location-dropdown" class="search-dropdown" style="display:none;"></div>
+          </div>
+          <div style="font-size:0.78rem;color:var(--text-hint);margin-top:0.35rem;">Opcional. Si escribes una ubicacion, selecciona una sugerencia valida.</div>
+        </div>
+        <div style="margin-bottom:1.25rem;">
           <label class="section-title">Fecha y hora de inicio</label>
           <label style="display:flex;align-items:center;gap:0.55rem;color:var(--text-muted);font-size:0.92rem;margin-bottom:0.65rem;">
             <input id="t-has-start" type="checkbox" onchange="toggleStartDateInput(this.checked)" />

@@ -6,6 +6,7 @@ function presentUser(user) {
     profileSlug: user.username,
     displayName: user.displayName,
     bannerUrl: user.bannerUrl || '',
+    avatarDataUrl: user.avatarDataUrl || '',
     role: user.role,
     isLicensed: user.isLicensed,
     invitationPolicy: user.invitationPolicy || 'manual',
@@ -21,6 +22,7 @@ function presentUserSearch(users) {
     profileSlug: user.username,
     displayName: user.displayName,
     bannerUrl: user.bannerUrl || '',
+    avatarDataUrl: user.avatarDataUrl || '',
     role: user.role,
   }));
 }
