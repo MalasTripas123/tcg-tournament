@@ -8,7 +8,6 @@ const authRoutes = require('./modules/auth/auth.routes');
 const userRoutes = require('./modules/users/user.routes');
 const tournamentRoutes = require('./modules/tournaments/tournament.routes');
 const gameRoutes = require('./modules/games/game.routes');
-const locationRoutes = require('./modules/locations/location.routes');
 
 function createApp() {
   const app = express();
@@ -29,7 +28,6 @@ function createApp() {
 
   app.use('/auth', authRoutes);
   app.use('/api/games', gameRoutes);
-  app.use('/api/locations', locationRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/tournaments', tournamentRoutes);
 

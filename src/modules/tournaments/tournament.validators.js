@@ -42,6 +42,14 @@ function optionalTimestamp(value) {
   return parsed;
 }
 
+function optionalBoolean(value, field) {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw ApiError.badRequest(`${field} es invalido`);
+}
+
 function validatePrizes(prizes) {
   if (!Array.isArray(prizes)) return [];
   if (prizes.length > 20) throw ApiError.badRequest('Demasiados premios');
@@ -97,13 +105,12 @@ function validateCreateTournament(req) {
       bannerUrl: optionalString(req.body.bannerUrl, 600),
       gameId: optionalString(req.body.gameId, 120),
       gameFormatId: optionalString(req.body.gameFormatId, 120),
-      locationId: optionalString(req.body.locationId, 140),
-      location: optionalString(req.body.location, 180),
       scheduledStartAt: optionalTimestamp(req.body.scheduledStartAt),
       totalRounds: asInt(req.body.totalRounds, 'Rondas', 1, 20),
       roundDuration: asInt(req.body.roundDuration, 'Duracion', 0, MAX_ROUND_DURATION_MINUTES, 50),
       minPlayers,
       maxPlayers,
+      isRanked: optionalBoolean(req.body.isRanked, 'Tipo de torneo'),
       visibility,
       pairingMethod: PAIRING_METHODS.has(req.body.pairingMethod) ? req.body.pairingMethod : 'snake',
       tableMode: TABLE_MODES.has(req.body.tableMode) ? req.body.tableMode : 'multi',
@@ -167,8 +174,6 @@ function validateTournamentSettings(req) {
   if (req.body.bannerUrl !== undefined) body.bannerUrl = optionalString(req.body.bannerUrl, 600);
   if (req.body.gameId !== undefined) body.gameId = optionalString(req.body.gameId, 120);
   if (req.body.gameFormatId !== undefined) body.gameFormatId = optionalString(req.body.gameFormatId, 120);
-  if (req.body.locationId !== undefined) body.locationId = optionalString(req.body.locationId, 140);
-  if (req.body.location !== undefined) body.location = optionalString(req.body.location, 180);
   if (!Object.keys(body).length) throw ApiError.badRequest('No hay cambios para aplicar');
   return { body };
 }

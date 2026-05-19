@@ -14,11 +14,11 @@ const App = {
   autosaveStatus: {},
   standingsColumns: { cards: false, wins: true, draws: false, owp: true },
   homeFilters: { name: '', visibility: '', ranked: false, sort: 'created-desc' },
+  tournamentBrowserFilters: {},
   homeFinishedExpanded: false,
   currentProfileUser: null,
   gameCatalog: [],
   profileAvatarDraft: '',
-  locationSearchTimers: {},
 };
 
 const AUTOSAVE_DELAY_MS = 750;
@@ -51,6 +51,11 @@ async function resolveRoute(pathname) {
   if (!section || section === '') {
     _showView('home');
     loadTournaments();
+    return;
+  }
+
+  if (section === 'tournaments') {
+    await showTournamentBrowserFromRoute(id);
     return;
   }
 
@@ -502,91 +507,8 @@ function tournamentGameText(t) {
   return t.gameName + (t.gameFormatName ? ' - ' + t.gameFormatName : '');
 }
 
-function tournamentLocationText(t) {
-  return t?.location ? t.location : 'Sin ubicacion definida';
-}
-
-function locationControlIds(scope) {
-  if (scope === 'settings') {
-    return {
-      input: 'tournament-settings-location',
-      hidden: 'tournament-settings-location-id',
-      dropdown: 'tournament-settings-location-dropdown',
-    };
-  }
-  return {
-    input: 't-location',
-    hidden: 't-location-id',
-    dropdown: 't-location-dropdown',
-  };
-}
-
-function setLocationControl(scope, location = null) {
-  const ids = locationControlIds(scope);
-  const input = document.getElementById(ids.input);
-  const hidden = document.getElementById(ids.hidden);
-  if (input) input.value = location?.label || '';
-  if (hidden) hidden.value = location?.id || '';
-  hideLocationDropdown(scope);
-}
-
-function selectedLocationPayload(scope) {
-  const ids = locationControlIds(scope);
-  const label = document.getElementById(ids.input)?.value.trim() || '';
-  const locationId = document.getElementById(ids.hidden)?.value.trim() || '';
-  return { label, locationId };
-}
-
-function requireValidLocationSelection(scope) {
-  const { label, locationId } = selectedLocationPayload(scope);
-  if (label && !locationId) {
-    toast('Selecciona una ubicacion valida desde las sugerencias', 'error');
-    return false;
-  }
-  return true;
-}
-
-function handleLocationSearch(scope, q) {
-  const ids = locationControlIds(scope);
-  const hidden = document.getElementById(ids.hidden);
-  if (hidden) hidden.value = '';
-  clearTimeout(App.locationSearchTimers[scope]);
-  if (String(q || '').trim().length < 2) {
-    hideLocationDropdown(scope);
-    return;
-  }
-  App.locationSearchTimers[scope] = setTimeout(() => searchLocations(scope, q), 250);
-}
-
-async function searchLocations(scope, q) {
-  const ids = locationControlIds(scope);
-  const dropdown = document.getElementById(ids.dropdown);
-  if (!dropdown) return;
-  try {
-    const locations = await api('/api/locations/search?q=' + encodeURIComponent(q));
-    dropdown.innerHTML = locations.length ? locations.map(location => `
-      <button type="button" class="search-dropdown-item" style="width:100%;text-align:left;background:transparent;color:inherit;border:0;"
-              onmousedown="selectLocation('${scope}','${jsAttr(location.id)}','${jsAttr(location.label)}')">
-        <div style="flex:1;">
-          <div style="font-weight:700;font-size:0.9rem;">${escHtml(location.locality)}</div>
-          <div style="font-size:0.78rem;color:var(--text-muted);">${escHtml(location.region)} - ${escHtml(location.country)}</div>
-        </div>
-        <span class="badge badge-gray">${escHtml(location.countryCode)}</span>
-      </button>`).join('') : '<div class="search-dropdown-empty">Sin ubicaciones encontradas</div>';
-    dropdown.style.display = 'block';
-  } catch {
-    dropdown.innerHTML = '<div class="search-dropdown-empty">No se pudo buscar ubicaciones</div>';
-    dropdown.style.display = 'block';
-  }
-}
-
-function selectLocation(scope, id, label) {
-  setLocationControl(scope, { id, label });
-}
-
-function hideLocationDropdown(scope) {
-  const dropdown = document.getElementById(locationControlIds(scope).dropdown);
-  if (dropdown) dropdown.style.display = 'none';
+function currentUserCanCreateRankedTournament() {
+  return !!(App.currentUser?.isLicensed && App.currentUser?.role === 'organizer');
 }
 
 function isTournamentManager(t) {
@@ -645,6 +567,28 @@ function togglePlayerLimitInputs(enabled) {
     input.disabled = !enabled;
     if (!enabled) input.value = '';
   });
+}
+
+function updateCreateRankingHint() {
+  const canRank = currentUserCanCreateRankedTournament();
+  const rankedWrap = document.getElementById('t-ranked-wrap');
+  const rankedInput = document.getElementById('t-is-ranked');
+  const rankedHint = document.getElementById('t-ranked-hint');
+  const limitsHint = document.getElementById('t-player-limits-hint');
+  if (rankedWrap) rankedWrap.style.display = canRank ? '' : 'none';
+  if (!rankedInput) return;
+  if (!canRank) rankedInput.checked = false;
+  const isRanked = canRank && rankedInput.checked;
+  if (rankedHint) {
+    rankedHint.textContent = isRanked
+      ? 'Otorga puntos al ranking de tu tienda y exige minimo 8 jugadores.'
+      : 'Casual: no otorga ni quita puntos de ranking y usa minimo base 2 jugadores.';
+  }
+  if (limitsHint) {
+    limitsHint.textContent = isRanked
+      ? 'Los torneos rankeados oficiales mantienen minimo 8 aunque dejes este campo vacio.'
+      : 'Los torneos casuales tienen minimo base 2 jugadores.';
+  }
 }
 
 function tournamentVisibilityLabel(visibility) {
@@ -754,6 +698,7 @@ function navigate(view, id) {
   // Calcular la URL canónica para cada vista
   const urlMap = {
     home:      '/',
+    tournaments: '/tournaments',
     create:    '/create',
     lobby:     id ? '/lobby/' + id : '/lobby',
     organizer: id ? '/organizer/' + id : '/organizer',
@@ -766,6 +711,7 @@ function navigate(view, id) {
   // Actualizar título de la pestaña
   const titles = {
     home: 'TCG Tournament',
+    tournaments: 'Torneos - TCG Tournament',
     create: 'Crear Torneo - TCG Tournament',
     lobby: 'Lobby - TCG Tournament',
     organizer: 'Organizar - TCG Tournament',
@@ -777,6 +723,7 @@ function navigate(view, id) {
   _showView(view);
   if (id) App.currentTournamentId = id;
   if (view === 'home') loadTournaments();
+  if (view === 'tournaments') renderTournamentBrowser();
 }
 
 function isPlainLeftClick(event) {
@@ -899,8 +846,12 @@ async function doRegister() {
 // ═══════════════════════════════════════════════════════════════
 // HOME
 // ═══════════════════════════════════════════════════════════════
-async function loadTournaments() {
-  try { App.tournaments = await api('/api/tournaments'); renderTournamentsList(App.tournaments); } catch(e) { console.error(e); }
+async function loadTournaments({ renderHome = true } = {}) {
+  try {
+    App.tournaments = await api('/api/tournaments');
+    if (renderHome) renderTournamentsList(App.tournaments);
+    if (App.currentView === 'tournaments') renderTournamentBrowserResults();
+  } catch(e) { console.error(e); }
 }
 
 function legacyRenderTournamentsList(list) {
@@ -960,7 +911,386 @@ function toggleFinishedHomeSection() {
 function sectionMoreLinkClick(event, section) {
   if (!isPlainLeftClick(event)) return;
   event.preventDefault();
-  toast('La pagina de ' + section + ' se agregara despues.', 'info');
+  openTournamentBrowser(tournamentBrowserPresetForSection(section));
+}
+
+function tournamentsLinkClick(event) {
+  if (!isPlainLeftClick(event)) return;
+  event.preventDefault();
+  openTournamentBrowser();
+}
+
+const TOURNAMENT_BROWSER_DEFAULT_FILTERS = {
+  q: '',
+  status: '',
+  gameId: '',
+  formatId: '',
+  visibility: '',
+  ranked: '',
+  tableMode: '',
+  dateType: 'scheduled',
+  dateFrom: '',
+  dateTo: '',
+  roundsMin: '',
+  roundsMax: '',
+  durationMin: '',
+  durationMax: '',
+  playersMin: '',
+  playersMax: '',
+  sort: 'scheduled-asc',
+};
+
+function defaultTournamentBrowserFilters() {
+  return { ...TOURNAMENT_BROWSER_DEFAULT_FILTERS };
+}
+
+function tournamentBrowserPresetForSection(section) {
+  const key = String(section || '').toLowerCase();
+  if (key === 'lobby') return { status: 'lobby' };
+  if (key === 'active' || key === 'en curso') return { status: 'active' };
+  if (key === 'finished' || key === 'finalizados') return { status: 'finished' };
+  if (key === 'review') return { status: 'review' };
+  return {};
+}
+
+function normalizeTournamentBrowserFilters(filters = {}) {
+  const next = defaultTournamentBrowserFilters();
+  for (const key of Object.keys(next)) {
+    if (filters[key] !== undefined && filters[key] !== null) next[key] = String(filters[key]);
+  }
+  if (!['', 'lobby', 'active', 'review', 'finished'].includes(next.status)) next.status = '';
+  if (!['', 'public', 'approval', 'private'].includes(next.visibility)) next.visibility = '';
+  if (!['', 'ranked', 'normal'].includes(next.ranked)) next.ranked = '';
+  if (!['', 'multi', 'versus'].includes(next.tableMode)) next.tableMode = '';
+  if (!['scheduled', 'created'].includes(next.dateType)) next.dateType = 'scheduled';
+  if (!['created-desc', 'created-asc', 'scheduled-desc', 'scheduled-asc', 'name-asc', 'players-desc', 'rounds-desc'].includes(next.sort)) next.sort = 'scheduled-asc';
+  return next;
+}
+
+function tournamentBrowserFiltersFromUrl(section = '') {
+  const params = new URLSearchParams(location.search);
+  const raw = { ...defaultTournamentBrowserFilters(), ...tournamentBrowserPresetForSection(section) };
+  for (const key of Object.keys(raw)) {
+    if (params.has(key)) raw[key] = params.get(key) || '';
+  }
+  return normalizeTournamentBrowserFilters(raw);
+}
+
+function tournamentBrowserHref(filters = {}) {
+  const merged = normalizeTournamentBrowserFilters({ ...defaultTournamentBrowserFilters(), ...filters });
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(merged)) {
+    if (value && value !== TOURNAMENT_BROWSER_DEFAULT_FILTERS[key]) params.set(key, value);
+  }
+  const query = params.toString();
+  return '/tournaments' + (query ? '?' + query : '');
+}
+
+async function showTournamentBrowserFromRoute(section = '') {
+  App.tournamentBrowserFilters = tournamentBrowserFiltersFromUrl(section);
+  if (!App.tournaments.length) await loadTournaments({ renderHome: false });
+  renderTournamentBrowser();
+  document.title = 'Torneos - TCG Tournament';
+  _showView('tournaments');
+}
+
+async function openTournamentBrowser(preset = {}) {
+  App.tournamentBrowserFilters = normalizeTournamentBrowserFilters({ ...defaultTournamentBrowserFilters(), ...preset });
+  if (!App.tournaments.length) await loadTournaments({ renderHome: false });
+  history.pushState({ view: 'tournaments' }, '', tournamentBrowserHref(App.tournamentBrowserFilters));
+  renderTournamentBrowser();
+  document.title = 'Torneos - TCG Tournament';
+  _showView('tournaments');
+}
+
+function updateTournamentBrowserFilter(key, value) {
+  App.tournamentBrowserFilters = normalizeTournamentBrowserFilters({
+    ...defaultTournamentBrowserFilters(),
+    ...App.tournamentBrowserFilters,
+    [key]: value,
+  });
+  if (key === 'gameId') {
+    App.tournamentBrowserFilters.formatId = '';
+    const formatSelect = document.getElementById('all-filter-format');
+    if (formatSelect) {
+      formatSelect.innerHTML = renderTournamentBrowserFormatOptions(value, '');
+      formatSelect.disabled = !value;
+    }
+  }
+  updateTournamentBrowserUrl();
+  renderTournamentBrowserResults();
+}
+
+function resetTournamentBrowserFilters() {
+  App.tournamentBrowserFilters = defaultTournamentBrowserFilters();
+  updateTournamentBrowserUrl();
+  renderTournamentBrowser();
+}
+
+function updateTournamentBrowserUrl() {
+  if (App.currentView !== 'tournaments') return;
+  history.replaceState({ view: 'tournaments' }, '', tournamentBrowserHref(App.tournamentBrowserFilters));
+}
+
+function renderTournamentBrowserGameOptions(selected = '') {
+  const games = new Map();
+  for (const game of App.gameCatalog || []) games.set(game.id, game.name);
+  for (const tournament of App.tournaments || []) {
+    if (tournament.gameId && tournament.gameName) games.set(tournament.gameId, tournament.gameName);
+  }
+  return `<option value="">Todos los juegos</option>${Array.from(games.entries())
+    .sort((a, b) => a[1].localeCompare(b[1], 'es'))
+    .map(([id, name]) => `<option value="${escHtml(id)}" ${id === selected ? 'selected' : ''}>${escHtml(name)}</option>`)
+    .join('')}`;
+}
+
+function renderTournamentBrowserFormatOptions(gameId = '', selected = '') {
+  const formats = new Map();
+  const game = gameById(gameId);
+  for (const format of game?.formats || []) formats.set(format.id, format.name);
+  for (const tournament of App.tournaments || []) {
+    if (tournament.gameId === gameId && tournament.gameFormatId && tournament.gameFormatName) {
+      formats.set(tournament.gameFormatId, tournament.gameFormatName);
+    }
+  }
+  return `<option value="">Todos los formatos</option>${Array.from(formats.entries())
+    .sort((a, b) => a[1].localeCompare(b[1], 'es'))
+    .map(([id, name]) => `<option value="${escHtml(id)}" ${id === selected ? 'selected' : ''}>${escHtml(name)}</option>`)
+    .join('')}`;
+}
+
+function renderTournamentBrowser() {
+  const c = document.getElementById('tournaments-browser');
+  if (!c) return;
+  const filters = normalizeTournamentBrowserFilters(App.tournamentBrowserFilters);
+  App.tournamentBrowserFilters = filters;
+  c.innerHTML = `
+    <div class="tournaments-page">
+      <aside class="tournament-filter-panel">
+        <div class="tournament-filter-header">
+          <span class="section-title" style="margin:0;border:none;padding:0;">Filtros</span>
+          <button class="btn btn-ghost btn-sm" onclick="resetTournamentBrowserFilters()">Limpiar</button>
+        </div>
+
+        <label class="tournament-filter-field">
+          <span>Busqueda</span>
+          <input id="all-filter-q" class="input" value="${escHtml(filters.q)}" placeholder="Torneo, organizador o juego..." oninput="updateTournamentBrowserFilter('q', this.value)" />
+        </label>
+
+        <label class="tournament-filter-field">
+          <span>Estado</span>
+          <select id="all-filter-status" class="input" onchange="updateTournamentBrowserFilter('status', this.value)">
+            <option value="" ${filters.status === '' ? 'selected' : ''}>Todos</option>
+            <option value="lobby" ${filters.status === 'lobby' ? 'selected' : ''}>En lobby</option>
+            <option value="active" ${filters.status === 'active' ? 'selected' : ''}>En curso</option>
+            <option value="review" ${filters.status === 'review' ? 'selected' : ''}>Revision</option>
+            <option value="finished" ${filters.status === 'finished' ? 'selected' : ''}>Finalizados</option>
+          </select>
+        </label>
+
+        <label class="tournament-filter-field">
+          <span>Juego</span>
+          <select id="all-filter-game" class="input" onchange="updateTournamentBrowserFilter('gameId', this.value)">
+            ${renderTournamentBrowserGameOptions(filters.gameId)}
+          </select>
+        </label>
+
+        <label class="tournament-filter-field">
+          <span>Formato</span>
+          <select id="all-filter-format" class="input" ${filters.gameId ? '' : 'disabled'} onchange="updateTournamentBrowserFilter('formatId', this.value)">
+            ${renderTournamentBrowserFormatOptions(filters.gameId, filters.formatId)}
+          </select>
+        </label>
+
+        <div class="tournament-filter-grid">
+          <label class="tournament-filter-field">
+            <span>Tipo</span>
+            <select class="input" onchange="updateTournamentBrowserFilter('ranked', this.value)">
+              <option value="" ${filters.ranked === '' ? 'selected' : ''}>Todos</option>
+              <option value="ranked" ${filters.ranked === 'ranked' ? 'selected' : ''}>Rankeados</option>
+              <option value="normal" ${filters.ranked === 'normal' ? 'selected' : ''}>Normales</option>
+            </select>
+          </label>
+          <label class="tournament-filter-field">
+            <span>Visibilidad</span>
+            <select class="input" onchange="updateTournamentBrowserFilter('visibility', this.value)">
+              <option value="" ${filters.visibility === '' ? 'selected' : ''}>Todas</option>
+              <option value="public" ${filters.visibility === 'public' ? 'selected' : ''}>Publicos</option>
+              <option value="approval" ${filters.visibility === 'approval' ? 'selected' : ''}>Aprobacion</option>
+              <option value="private" ${filters.visibility === 'private' ? 'selected' : ''}>Privados</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="tournament-filter-field">
+          <span>Mesas</span>
+          <select class="input" onchange="updateTournamentBrowserFilter('tableMode', this.value)">
+            <option value="" ${filters.tableMode === '' ? 'selected' : ''}>Multi y Versus</option>
+            <option value="multi" ${filters.tableMode === 'multi' ? 'selected' : ''}>Multi</option>
+            <option value="versus" ${filters.tableMode === 'versus' ? 'selected' : ''}>Versus</option>
+          </select>
+        </label>
+
+        <div class="tournament-filter-grid">
+          <label class="tournament-filter-field">
+            <span>Rondas min.</span>
+            <input class="input" type="number" min="1" value="${escHtml(filters.roundsMin)}" oninput="updateTournamentBrowserFilter('roundsMin', this.value)" />
+          </label>
+          <label class="tournament-filter-field">
+            <span>Rondas max.</span>
+            <input class="input" type="number" min="1" value="${escHtml(filters.roundsMax)}" oninput="updateTournamentBrowserFilter('roundsMax', this.value)" />
+          </label>
+        </div>
+
+        <div class="tournament-filter-grid">
+          <label class="tournament-filter-field">
+            <span>Jugadores min.</span>
+            <input class="input" type="number" min="0" value="${escHtml(filters.playersMin)}" oninput="updateTournamentBrowserFilter('playersMin', this.value)" />
+          </label>
+          <label class="tournament-filter-field">
+            <span>Jugadores max.</span>
+            <input class="input" type="number" min="0" value="${escHtml(filters.playersMax)}" oninput="updateTournamentBrowserFilter('playersMax', this.value)" />
+          </label>
+        </div>
+
+        <div class="tournament-filter-grid">
+          <label class="tournament-filter-field">
+            <span>Duracion min.</span>
+            <input class="input" type="number" min="0" value="${escHtml(filters.durationMin)}" oninput="updateTournamentBrowserFilter('durationMin', this.value)" />
+          </label>
+          <label class="tournament-filter-field">
+            <span>Duracion max.</span>
+            <input class="input" type="number" min="0" value="${escHtml(filters.durationMax)}" oninput="updateTournamentBrowserFilter('durationMax', this.value)" />
+          </label>
+        </div>
+
+        <label class="tournament-filter-field">
+          <span>Fecha</span>
+          <select class="input" onchange="updateTournamentBrowserFilter('dateType', this.value)">
+            <option value="scheduled" ${filters.dateType === 'scheduled' ? 'selected' : ''}>Realizacion</option>
+            <option value="created" ${filters.dateType === 'created' ? 'selected' : ''}>Creacion</option>
+          </select>
+        </label>
+
+        <div class="tournament-filter-grid">
+          <label class="tournament-filter-field">
+            <span>Desde</span>
+            <input class="input" type="date" value="${escHtml(filters.dateFrom)}" onchange="updateTournamentBrowserFilter('dateFrom', this.value)" />
+          </label>
+          <label class="tournament-filter-field">
+            <span>Hasta</span>
+            <input class="input" type="date" value="${escHtml(filters.dateTo)}" onchange="updateTournamentBrowserFilter('dateTo', this.value)" />
+          </label>
+        </div>
+      </aside>
+
+      <section class="tournaments-results">
+        <div class="tournaments-results-header">
+          <div>
+            <span class="section-title" style="margin:0;border:none;padding:0;">Torneos</span>
+            <div id="tournament-browser-count" class="tournament-browser-count"></div>
+          </div>
+          <select id="all-filter-sort" class="input tournament-sort-select" onchange="updateTournamentBrowserFilter('sort', this.value)">
+            <option value="scheduled-asc" ${filters.sort === 'scheduled-asc' ? 'selected' : ''}>Realizacion: proximos</option>
+            <option value="scheduled-desc" ${filters.sort === 'scheduled-desc' ? 'selected' : ''}>Realizacion: recientes</option>
+            <option value="created-desc" ${filters.sort === 'created-desc' ? 'selected' : ''}>Creacion: recientes</option>
+            <option value="created-asc" ${filters.sort === 'created-asc' ? 'selected' : ''}>Creacion: antiguos</option>
+            <option value="name-asc" ${filters.sort === 'name-asc' ? 'selected' : ''}>Nombre A-Z</option>
+            <option value="players-desc" ${filters.sort === 'players-desc' ? 'selected' : ''}>Mas jugadores</option>
+            <option value="rounds-desc" ${filters.sort === 'rounds-desc' ? 'selected' : ''}>Mas rondas</option>
+          </select>
+        </div>
+        <div id="tournament-browser-list" class="tournaments-results-grid"></div>
+      </section>
+    </div>`;
+  renderTournamentBrowserResults();
+}
+
+function renderTournamentBrowserResults() {
+  const listEl = document.getElementById('tournament-browser-list');
+  const countEl = document.getElementById('tournament-browser-count');
+  if (!listEl || !countEl) return;
+  const filtered = filterTournamentBrowserList(App.tournaments || []);
+  countEl.textContent = `${filtered.length} de ${(App.tournaments || []).length} torneos`;
+  listEl.innerHTML = filtered.length
+    ? filtered.map(renderTournamentHomeCard).join('')
+    : `<div class="tournament-browser-empty">No hay torneos con estos filtros.</div>`;
+}
+
+function filterTournamentBrowserList(list) {
+  const filters = normalizeTournamentBrowserFilters(App.tournamentBrowserFilters);
+  return (list || []).filter(t => tournamentMatchesBrowserFilters(t, filters)).sort(tournamentBrowserSorter(filters.sort));
+}
+
+function tournamentMatchesBrowserFilters(t, filters) {
+  const q = filters.q.trim().toLowerCase();
+  if (q && ![
+    t.name,
+    t.organizerName,
+    t.organizerUsername,
+    t.gameName,
+    t.gameFormatName,
+    tournamentVisibilityLabel(t.visibility),
+    statusMeta(t.status).label,
+  ].some(value => String(value || '').toLowerCase().includes(q))) return false;
+
+  if (filters.status) {
+    if (filters.status === 'active') {
+      if (!['active', 'review'].includes(t.status)) return false;
+    } else if (t.status !== filters.status) return false;
+  }
+  if (filters.gameId && t.gameId !== filters.gameId) return false;
+  if (filters.formatId && t.gameFormatId !== filters.formatId) return false;
+  if (filters.visibility && (t.visibility || 'public') !== filters.visibility) return false;
+  if (filters.ranked === 'ranked' && !t.isRanked) return false;
+  if (filters.ranked === 'normal' && t.isRanked) return false;
+  if (filters.tableMode && (t.tableMode || 'multi') !== filters.tableMode) return false;
+  if (!numberInBrowserRange(t.totalRounds, filters.roundsMin, filters.roundsMax)) return false;
+  if (!numberInBrowserRange(t.roundDuration, filters.durationMin, filters.durationMax)) return false;
+  if (!numberInBrowserRange((t.players || []).length, filters.playersMin, filters.playersMax)) return false;
+  if (!dateInBrowserRange(tournamentBrowserTimestamp(t, filters.dateType), filters.dateFrom, filters.dateTo)) return false;
+  return true;
+}
+
+function numberInBrowserRange(value, min, max) {
+  const number = Number(value);
+  const minNumber = min === '' ? null : Number(min);
+  const maxNumber = max === '' ? null : Number(max);
+  if (min !== '' && Number.isFinite(minNumber) && number < minNumber) return false;
+  if (max !== '' && Number.isFinite(maxNumber) && number > maxNumber) return false;
+  return true;
+}
+
+function dateInBrowserRange(timestamp, from, to) {
+  if (!from && !to) return true;
+  if (!timestamp) return false;
+  const fromTime = from ? new Date(from + 'T00:00:00').getTime() : null;
+  const toTime = to ? new Date(to + 'T23:59:59').getTime() : null;
+  if (fromTime && timestamp < fromTime) return false;
+  if (toTime && timestamp > toTime) return false;
+  return true;
+}
+
+function tournamentBrowserTimestamp(t, type) {
+  const raw = type === 'created' ? t.createdAt : t.scheduledStartAt;
+  if (!raw) return 0;
+  if (typeof raw === 'number') return raw;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function tournamentBrowserSorter(sortKey) {
+  return (a, b) => {
+    if (sortKey === 'name-asc') return String(a.name || '').localeCompare(String(b.name || ''), 'es');
+    if (sortKey === 'players-desc') return (b.players || []).length - (a.players || []).length;
+    if (sortKey === 'rounds-desc') return (b.totalRounds || 0) - (a.totalRounds || 0);
+    if (sortKey === 'created-asc') return tournamentBrowserTimestamp(a, 'created') - tournamentBrowserTimestamp(b, 'created');
+    if (sortKey === 'created-desc') return tournamentBrowserTimestamp(b, 'created') - tournamentBrowserTimestamp(a, 'created');
+    if (sortKey === 'scheduled-desc') return tournamentBrowserTimestamp(b, 'scheduled') - tournamentBrowserTimestamp(a, 'scheduled');
+    const aTime = tournamentBrowserTimestamp(a, 'scheduled') || Number.MAX_SAFE_INTEGER;
+    const bTime = tournamentBrowserTimestamp(b, 'scheduled') || Number.MAX_SAFE_INTEGER;
+    return aTime - bTime;
+  };
 }
 
 function homeVisibleTournaments(list) {
@@ -974,7 +1304,6 @@ function homeVisibleTournaments(list) {
       t.organizerUsername,
       t.gameName,
       t.gameFormatName,
-      t.location,
     ].some(value => String(value || '').toLowerCase().includes(nameQuery)))
     .filter(t => !filters.visibility || (t.visibility || 'public') === filters.visibility)
     .filter(t => !filters.ranked || !!t.isRanked)
@@ -1027,7 +1356,7 @@ function renderHomeSection(key, title, tournaments, collapsible) {
         <span>${title}</span>
         <span class="badge badge-gray">${tournaments.length}</span>
       </button>
-      <a class="btn btn-ghost btn-sm" href="/tournaments/${key}" onclick="sectionMoreLinkClick(event,'${jsAttr(title.toLowerCase())}')">Ver mas</a>
+      <a class="btn btn-ghost btn-sm" href="${tournamentBrowserHref(tournamentBrowserPresetForSection(key))}" onclick="sectionMoreLinkClick(event,'${jsAttr(key)}')">Ver mas</a>
     </div>
     ${expanded ? `
       ${shown.length ? `<div class="home-section-scroll-wrap">
@@ -1056,13 +1385,20 @@ function renderTournamentHomeCard(t) {
       ${isOrg ? '<span class="badge badge-purple">Tu torneo</span>' : ''}
     </div>
     <div class="tournament-card-row tournament-card-title">${escHtml(t.name)}</div>
-    <div class="tournament-card-row tournament-card-muted">Organizador: ${escHtml(t.organizerName || 'Sin organizador')}</div>
-    <div class="tournament-card-row tournament-card-muted">${escHtml(tournamentGameText(t))}</div>
-    <div class="tournament-card-row tournament-card-muted">${formatDateTime(t.scheduledStartAt)}</div>
-    <div class="tournament-card-row">${tournamentPlayerLimitText(t)}</div>
-    <div class="tournament-card-row">Rondas: ${t.currentRound || 0}/${t.totalRounds} - ${durationLabel(t.roundDuration)}</div>
-    <div class="tournament-card-row tournament-card-visibility">${tournamentVisibilityLabel(t.visibility)}</div>
+    ${tournamentCardInfoRow('ai-user', '@', 'Organizador: ' + (t.organizerName || 'Sin organizador'), 'tournament-card-muted')}
+    ${tournamentCardInfoRow('ai-card', '*', tournamentGameText(t), 'tournament-card-muted')}
+    ${tournamentCardInfoRow('ai-calendar', 'D', formatDateTime(t.scheduledStartAt), 'tournament-card-muted')}
+    ${tournamentCardInfoRow('ai-users', 'P', tournamentPlayerLimitText(t))}
+    ${tournamentCardInfoRow('ai-repeat', 'R', `Rondas: ${t.currentRound || 0}/${t.totalRounds} - ${durationLabel(t.roundDuration)}`)}
+    ${tournamentCardInfoRow('ai-eye', 'V', tournamentVisibilityLabel(t.visibility), 'tournament-card-visibility')}
   </a>`;
+}
+
+function tournamentCardInfoRow(iconClass, fallback, text, extraClass = '') {
+  return `<div class="tournament-card-row tournament-card-info ${extraClass}">
+    <span class="tournament-card-icon ${iconClass} h5 mb-0 me-2" data-fallback="${escHtml(fallback)}" aria-hidden="true"></span>
+    <span class="tournament-card-text">${escHtml(text)}</span>
+  </div>`;
 }
 
 async function openTournament(id) {
@@ -1101,11 +1437,9 @@ function prepareCreateTournamentForm() {
     startToggle.checked = false;
     toggleStartDateInput(false);
   }
-  const locationInput = document.getElementById('t-location');
-  if (locationInput) locationInput.value = '';
-  const locationIdInput = document.getElementById('t-location-id');
-  if (locationIdInput) locationIdInput.value = '';
-  hideLocationDropdown('create');
+  const rankedInput = document.getElementById('t-is-ranked');
+  if (rankedInput) rankedInput.checked = currentUserCanCreateRankedTournament();
+  updateCreateRankingHint();
   const gameSelect = document.getElementById('t-game');
   if (gameSelect) gameSelect.value = '';
   populateCreateGameControls();
@@ -1307,7 +1641,7 @@ async function submitCreateTournament(e) {
   const tableMode = document.getElementById('t-table-mode').value;
   const gameId = document.getElementById('t-game')?.value || '';
   const gameFormatId = document.getElementById('t-format')?.value || '';
-  const { label: location, locationId } = selectedLocationPayload('create');
+  const isRanked = currentUserCanCreateRankedTournament() && !!document.getElementById('t-is-ranked')?.checked;
   const scheduledStartAt = document.getElementById('t-has-start')?.checked ? readDateTimeLocal('t-start') : null;
   const hasPlayerLimits = document.getElementById('t-has-player-limits')?.checked;
   const minPlayers = hasPlayerLimits ? (document.getElementById('t-min-players').value || null) : null;
@@ -1317,7 +1651,11 @@ async function submitCreateTournament(e) {
     toast('El minimo no puede superar el maximo de jugadores', 'error');
     return;
   }
-  if (!requireValidLocationSelection('create')) return;
+  const effectiveMinimum = Math.max(isRanked ? 8 : 2, minPlayers ? parseInt(minPlayers, 10) : 0);
+  if (maxPlayers && parseInt(maxPlayers, 10) < effectiveMinimum) {
+    toast(`El maximo debe ser al menos ${effectiveMinimum} jugadores`, 'error');
+    return;
+  }
   if (!validatePrizesBeforeSubmit()) return;
   const prizes = App.prizes.map(({ type, value, imageUrl, creditCount, creditValue, distribution }) => ({
     type,
@@ -1328,7 +1666,7 @@ async function submitCreateTournament(e) {
     distribution,
   }));
   try {
-    const t = await api('/api/tournaments', { method: 'POST', body: { name, bannerUrl, gameId, gameFormatId, locationId, location, scheduledStartAt, totalRounds, roundDuration, minPlayers, maxPlayers, prizes, visibility, pairingMethod, tableMode } });
+    const t = await api('/api/tournaments', { method: 'POST', body: { name, bannerUrl, gameId, gameFormatId, isRanked, scheduledStartAt, totalRounds, roundDuration, minPlayers, maxPlayers, prizes, visibility, pairingMethod, tableMode } });
     App.tournaments.unshift(t);
     toast('Torneo "' + t.name + '" creado', 'success');
     renderLobby(t); navigate('lobby', t.id);
@@ -1351,7 +1689,6 @@ function renderLobby(t) {
             <span>🔄 ${t.totalRounds} rondas · ${durationLabel(t.roundDuration)}</span>
             <span>${visLabel[t.visibility] || '🌐 Público'}</span>
             <span>${escHtml(tournamentGameText(t))}</span>
-            <span>${escHtml(tournamentLocationText(t))}</span>
             <span>${tournamentPlayerLimitText(t)}</span>
             <span>${pairingLabel[t.pairingMethod] || 'Snake'}</span>
             <span>${tableModeLabel(t.tableMode)}</span>
@@ -1621,16 +1958,6 @@ function openTournamentSettingsModal(tid) {
             </select>
           </label>
         </div>
-        <label>
-          <span class="settings-label">Ubicacion</span>
-          <div style="position:relative;">
-            <input id="tournament-settings-location" class="input" type="text" maxlength="180" value="${escHtml(t.location || '')}" placeholder="Buscar comuna, region o pais"
-                   oninput="handleLocationSearch('settings', this.value)" onblur="setTimeout(()=>hideLocationDropdown('settings'),200)" autocomplete="off" />
-            <input id="tournament-settings-location-id" type="hidden" value="${escHtml(t.locationId || '')}" />
-            <div id="tournament-settings-location-dropdown" class="search-dropdown" style="display:none;"></div>
-          </div>
-          <div class="settings-note">Para cambiarla, selecciona una sugerencia valida. Borra el campo para dejarlo sin ubicacion.</div>
-        </label>
       </div>
 
       <div class="settings-section">
@@ -1738,8 +2065,6 @@ async function saveTournamentSettings(tid) {
     bannerUrl: document.getElementById('tournament-settings-banner')?.value.trim() || '',
     gameId: document.getElementById('tournament-settings-game')?.value || '',
     gameFormatId: document.getElementById('tournament-settings-format')?.value || '',
-    locationId: selectedLocationPayload('settings').locationId,
-    location: selectedLocationPayload('settings').label,
     scheduledStartAt: hasStart ? readDateTimeLocal('tournament-settings-start') : null,
     minPlayers,
     maxPlayers,
@@ -1749,7 +2074,6 @@ async function saveTournamentSettings(tid) {
   };
   const totalRounds = readNullableIntInput('tournament-settings-total-rounds');
   if (totalRounds !== null) body.totalRounds = totalRounds;
-  if (!requireValidLocationSelection('settings')) return;
 
   try {
     await flushAllPendingChanges(tid);
@@ -2059,7 +2383,6 @@ function renderFinalResults(t, editable = false) {
               <span>${t.players.length} jugadores</span>
               <span>${finishedRounds.length}/${t.totalRounds} rondas</span>
               <span>${escHtml(tournamentGameText(t))}</span>
-              <span>${escHtml(tournamentLocationText(t))}</span>
               <span>${t.isRanked ? 'Torneo oficial' : 'Torneo normal'}</span>
               ${viewerTournamentRoleBadge(t)}
             </div>
@@ -2071,7 +2394,7 @@ function renderFinalResults(t, editable = false) {
         ${renderAppealNotice(t)}
         <div class="card">
           <span class="section-title">Tabla final</span>
-          ${renderStandings(t.players, t.id, false, t.rounds)}
+          ${renderFinalStandings(t)}
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">
           ${t.isRanked ? `<div class="card">
@@ -2154,7 +2477,6 @@ function renderOrganizerView(t) {
             ${viewerTournamentRoleBadge(t)}
             ${currentRound ? `<span id="autosave-status-${currentRound.id}" class="${autosaveStatusClass(t.id, currentRound.id)}">${autosaveStatusLabel(t.id, currentRound.id)}</span>` : ''}
             <span style="font-size:0.85rem;color:var(--text-muted);">${escHtml(tournamentGameText(t))}</span>
-            <span style="font-size:0.85rem;color:var(--text-muted);">${escHtml(tournamentLocationText(t))}</span>
             <span style="font-size:0.85rem;color:var(--text-muted);">${formatDateTime(t.scheduledStartAt)}</span>
             ${t.isRanked ? '<span class="badge badge-gold">⭐ Rankeado</span>' : ''}
             <span style="font-size:0.85rem;color:var(--text-muted);">Ronda ${t.currentRound} / ${t.totalRounds}</span>
@@ -3158,7 +3480,6 @@ function renderSpectatorView(t) {
               </span>
               ${t.isRanked?'<span class="badge badge-gold">⭐ Rankeado</span>':''}
               <span class="badge badge-gray">${escHtml(tournamentGameText(t))}</span>
-              ${t.location ? `<span class="badge badge-gray">${escHtml(t.location)}</span>` : ''}
               <span class="badge badge-gray">Min. ${t.minimumPlayers || (t.isRanked ? 8 : 2)} jugadores</span>
               ${viewerTournamentRoleBadge(t)}
               <a href="${profileHref(t.organizerUsername || t.organizerId)}" onclick="profileLinkClick(event,'${jsAttr(t.organizerUsername || t.organizerId)}')" style="font-size:0.82rem;color:var(--accent);cursor:pointer;">por ${escHtml(t.organizerName)}</a>
@@ -3264,7 +3585,7 @@ function renderSpectatorView(t) {
         <div style="display:flex;flex-direction:column;gap:1rem;">
           <div class="card">
             <span class="section-title">Tabla de Posiciones</span>
-            ${renderStandings(t.players, t.id, false, t.rounds)}
+            ${isFinished ? renderFinalStandings(t) : renderStandings(t.players, t.id, false, t.rounds)}
           </div>
           ${t.prizes.length ? `
             <div class="card">
@@ -3379,6 +3700,12 @@ function renderStandingsCard(t) {
     ${renderStandings(t.players, t.id, false, t.rounds)}`;
 }
 
+function renderFinalStandings(t) {
+  return renderStandings(t.players, t.id, false, t.rounds, {
+    columns: { ...App.standingsColumns, cards: true },
+  });
+}
+
 function renderStandingsControls(tid) {
   const columns = App.standingsColumns;
   const options = [
@@ -3401,8 +3728,8 @@ function toggleStandingsColumn(tid, key, visible) {
   if (t) refreshStandingsCard(t);
 }
 
-function renderStandings(players, tid, editable, rounds) {
-  return renderStandingsV2(players, tid, editable, rounds);
+function renderStandings(players, tid, editable, rounds, options = {}) {
+  return renderStandingsV2(players, tid, editable, rounds, options);
   if (!players.length) return '<p style="color:var(--text-hint);text-align:center;padding:1rem 0;font-size:0.9rem;">Sin jugadores.</p>';
   rounds = rounds || [];
 
@@ -3464,10 +3791,10 @@ function renderStandings(players, tid, editable, rounds) {
   </div>`;
 }
 
-function renderStandingsV2(players, tid, editable, rounds) {
+function renderStandingsV2(players, tid, editable, rounds, options = {}) {
   if (!players.length) return '<p style="color:var(--text-hint);text-align:center;padding:1rem 0;font-size:0.9rem;">Sin jugadores.</p>';
   rounds = rounds || [];
-  const columns = App.standingsColumns;
+  const columns = options.columns || App.standingsColumns;
   const withOwp = players.map(p => ({ ...p, owp: calcOWP(p, players, rounds) }));
   const sorted = withOwp.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
@@ -3995,7 +4322,6 @@ function handleHeaderSearch(q) {
       t.organizerUsername,
       t.gameName,
       t.gameFormatName,
-      t.location,
     ].some(value => String(value || '').toLowerCase().includes(query))).slice(0,6);
     let userResults = [];
     try { userResults = await api('/api/users/search?q=' + encodeURIComponent(q)); } catch {}

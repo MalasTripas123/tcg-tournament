@@ -4,7 +4,6 @@ const { now } = require('../../shared/utils/dates');
 const authService = require('../auth/auth.service');
 const userRepository = require('../users/user.repository');
 const gameRepository = require('../games/game.repository');
-const locationRepository = require('../locations/location.repository');
 const tournamentRepository = require('./tournament.repository');
 const policies = require('./tournament.policies');
 const { generateRound } = require('./domain/matchmaking');
@@ -31,7 +30,6 @@ async function listTournaments({ query, viewerId } = {}) {
       tournament.organizerName,
       tournament.gameName,
       tournament.gameFormatName,
-      tournament.location,
     ].some(value => String(value || '').toLowerCase().includes(q)));
   }
   return tournaments.filter(tournament => policies.canViewTournament(tournament, viewerId));
@@ -48,19 +46,18 @@ async function getTournament(id, viewerId) {
 async function createTournament(data, organizerId) {
   const organizer = await userRepository.findByUid(organizerId);
   if (!organizer) throw ApiError.notFound('Organizador no encontrado');
-  const isRanked = !!(organizer.isLicensed && organizer.role === 'organizer');
+  const canCreateRanked = !!(organizer.isLicensed && organizer.role === 'organizer');
+  const isRanked = canCreateRanked ? data.isRanked !== false : false;
   const effectiveMinimum = Math.max(isRanked ? 8 : 2, Number.isFinite(Number(data.minPlayers)) ? Number(data.minPlayers) : 0);
   if (data.maxPlayers !== null && data.maxPlayers !== undefined && data.maxPlayers < effectiveMinimum) {
     throw ApiError.badRequest(`El maximo debe ser al menos ${effectiveMinimum} jugadores`);
   }
   const gameSelection = await resolveGameSelection(data);
-  const locationSelection = await resolveLocationSelection(data);
 
   return tournamentRepository.createTournament({
     name: data.name,
     bannerUrl: data.bannerUrl || '',
     ...gameSelection,
-    ...locationSelection,
     organizerId,
     organizerName: organizer.displayName,
     organizerUsername: organizer.username,
@@ -641,9 +638,6 @@ async function updateTournamentSettings(tournamentId, organizerId, data) {
   if (data.gameId !== undefined || data.gameFormatId !== undefined) {
     Object.assign(tournament, await resolveGameSelection(data, tournament));
   }
-  if (data.locationId !== undefined || data.location !== undefined) {
-    Object.assign(tournament, await resolveLocationSelection(data, tournament));
-  }
   if (data.scheduledStartAt !== undefined) tournament.scheduledStartAt = data.scheduledStartAt || null;
   if (data.minPlayers !== undefined) tournament.minPlayers = data.minPlayers;
   if (data.maxPlayers !== undefined) tournament.maxPlayers = data.maxPlayers;
@@ -1024,45 +1018,6 @@ async function resolveGameSelection(data = {}, currentTournament = null) {
   };
 }
 
-async function resolveLocationSelection(data = {}, currentTournament = null) {
-  const hasLocationIdChange = Object.prototype.hasOwnProperty.call(data, 'locationId');
-  const hasLocationTextChange = Object.prototype.hasOwnProperty.call(data, 'location');
-  const nextLocationId = hasLocationIdChange ? data.locationId : (currentTournament?.locationId || '');
-  const nextLocationText = hasLocationTextChange ? data.location : (currentTournament?.location || '');
-
-  if (!nextLocationId) {
-    if (String(nextLocationText || '').trim()) {
-      throw ApiError.badRequest('Selecciona una ubicacion valida desde las sugerencias');
-    }
-    return emptyLocationSelection();
-  }
-
-  const location = await locationRepository.findById(nextLocationId);
-  if (!location) throw ApiError.badRequest('Ubicacion invalida');
-
-  return {
-    locationId: location._id || location.id,
-    location: location.label,
-    locationLocality: location.locality,
-    locationRegion: location.region,
-    locationCountry: location.country,
-    locationLat: location.lat ?? null,
-    locationLng: location.lng ?? null,
-  };
-}
-
-function emptyLocationSelection() {
-  return {
-    locationId: '',
-    location: '',
-    locationLocality: '',
-    locationRegion: '',
-    locationCountry: '',
-    locationLat: null,
-    locationLng: null,
-  };
-}
-
 function createJoinRequest(tournament, user) {
   tournament.joinRequests.push({
     userId: user.uid,
@@ -1145,13 +1100,6 @@ function normalizeTournament(tournament) {
   tournament.gameName = tournament.gameName || '';
   tournament.gameFormatId = tournament.gameFormatId || '';
   tournament.gameFormatName = tournament.gameFormatName || '';
-  tournament.locationId = tournament.locationId || '';
-  tournament.location = tournament.location || '';
-  tournament.locationLocality = tournament.locationLocality || '';
-  tournament.locationRegion = tournament.locationRegion || '';
-  tournament.locationCountry = tournament.locationCountry || '';
-  tournament.locationLat = tournament.locationLat ?? null;
-  tournament.locationLng = tournament.locationLng ?? null;
   tournament.roundDuration = normalizeRoundDuration(tournament.roundDuration);
   tournament.minPlayers = tournament.minPlayers ?? null;
   tournament.maxPlayers = tournament.maxPlayers ?? null;
